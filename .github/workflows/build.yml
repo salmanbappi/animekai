@@ -21,7 +21,7 @@ jobs:
           distribution: adopt
 
       - name: Build extension
-        run: ./gradlew :en:animekai:assembleDebug
+        run: ./gradlew :src:en:animekai:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
