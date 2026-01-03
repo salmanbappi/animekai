@@ -2,7 +2,6 @@ plugins {
     id("com.android.library")
     kotlin("android")
     id("kotlinx-serialization")
-    id("org.jmailen.kotlinter")
 }
 
 android {
@@ -36,18 +35,6 @@ android {
 dependencies {
     compileOnly(versionCatalogs.named("libs").findBundle("common").get())
     implementation(project(":core"))
-}
-
-tasks {
-    preBuild {
-        dependsOn(lintKotlin)
-    }
-
-    if (System.getenv("CI") != "true") {
-        lintKotlin {
-            dependsOn(formatKotlin)
-        }
-    }
 }
 
 tasks.register("printDependentExtensions") {
