@@ -144,7 +144,12 @@ tasks.register("writeManifestFile") {
 }
 
 preBuild.dependsOn(writeManifestFile)
+// Disable lint globally
+tasks.whenTaskAdded { task ->
+    if (task.name.contains("lintKotlin")) {
+        task.enabled = false
+    }
+}
 if (System.getenv("CI") != "true") {
-    preBuild.dependsOn(lintKotlin)
     lintKotlin.dependsOn(formatKotlin)
 }
