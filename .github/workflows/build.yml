@@ -24,12 +24,23 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew :src:en:animekai:assembleDebug
 
+      - name: Get APK info
+        id: apk_info
+        run: |
+          APK_FILE=$(ls src/en/animekai/build/outputs/apk/debug/*.apk | head -n 1)
+          APK_NAME=$(basename $APK_FILE)
+          # Extract version like v14.1012 from aniyomi-en.animekai-v14.1012-debug.apk
+          VERSION=$(echo $APK_NAME | cut -d'-' -f3)
+          echo "apk_path=$APK_FILE" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v14.1002
-          name: Release v14.1002
-          files: src/en/animekai/build/outputs/apk/debug/*.apk
+          tag_name: ${{ steps.apk_info.outputs.version }}
+          name: Release ${{ steps.apk_info.outputs.version }}
+          files: ${{ steps.apk_info.outputs.apk_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -44,7 +55,7 @@ jobs:
           git clone https://$GH_PAT@github.com/salmanbappi/extensions-repo.git repo_sync
           
           # Copy the new APK
-          cp src/en/animekai/build/outputs/apk/debug/*.apk repo_sync/apk/
+          cp ${{ steps.apk_info.outputs.apk_path }} repo_sync/apk/
           
           # Run the generator
           cd repo_sync
@@ -52,5 +63,5 @@ jobs:
           
           # Push changes
           git add .
-          git commit -m "Update AnimeKai to v14.1002" || exit 0
+          git commit -m "Update AnimeKai to ${{ steps.apk_info.outputs.version }}" || exit 0
           git push origin main
