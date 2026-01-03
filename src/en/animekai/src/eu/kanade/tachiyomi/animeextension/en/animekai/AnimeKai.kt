@@ -12,6 +12,7 @@ class AnimeKai : ZoroTheme(
     "en",
     "AnimeKai",
     "https://animekai.to",
+    listOf("MegaCloud", "RapidCloud"),
 ) {
     override val id: Long = 7537715367149829913L
 
