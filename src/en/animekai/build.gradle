@@ -3,7 +3,7 @@ ext {
     extClass = '.AnimeKai'
     themePkg = 'zorotheme'
     baseUrl = 'https://animekai.to'
-    overrideVersionCode = 1000
+    overrideVersionCode = 1001
 }
 
 apply from: "$rootDir/common.gradle"
