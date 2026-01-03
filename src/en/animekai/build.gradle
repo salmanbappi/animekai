@@ -1,0 +1,13 @@
+ext {
+    extName = 'AnimeKai'
+    extClass = '.AnimeKai'
+    themePkg = 'zorotheme'
+    baseUrl = 'https://animekai.to'
+    extVersionCode = 1
+}
+
+apply from: "$rootDir/common.gradle"
+
+dependencies {
+    api(project(":lib:megacloud-extractor"))
+}
