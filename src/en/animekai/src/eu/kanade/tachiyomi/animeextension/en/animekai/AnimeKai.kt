@@ -17,8 +17,11 @@ class AnimeKai : ZoroTheme(
     // Hardcoded stable 64-bit source ID
     override val id: Long = 7537715367149829913L
 
-    // Zoro clones usually use /v2 for AJAX, but AnimeKai uses root /ajax
     override val ajaxRoute = ""
+    override fun episodeListRequest(anime: SAnime): Request {
+        val id = anime.url.substringAfterLast("-")
+        return GET("$baseUrl/ajax/episode/list?animeId=$id", headers)
+    }
 
     private val megaCloudExtractor by lazy { MegaCloudExtractor(client, headers, BuildConfig.MEGACLOUD_API) }
 
