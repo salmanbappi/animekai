@@ -14,8 +14,8 @@ class AnimeKai : ZoroTheme(
         "MegaCloud",
     ),
 ) {
-    // Hardcoded stable 64-bit source ID to prevent 'Obsolete' status
-    override val id: Long = 7823456123456789012L
+    // Hardcoded stable 64-bit source ID
+    override val id: Long = 7537715367149829913L
 
     override val ajaxRoute = "/v2"
 
