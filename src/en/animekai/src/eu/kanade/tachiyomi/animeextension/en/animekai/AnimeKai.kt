@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
+import eu.kanade.tachiyomi.network.interceptor.specificHostRateLimit
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
@@ -60,7 +61,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override val client: OkHttpClient by lazy {
         network.client.newBuilder()
-            .rateLimitHost(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
+            .specificHostRateLimit(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
             .build()
     }
 
@@ -71,11 +72,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
-    private var docHeaders by LazyMutable { headersBuilder().build() }
+    private var docHeaders: Headers = headersBuilder().build()
 
     private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
 
-    private var useEnglish by LazyMutable { preferences.getString("preferred_title_lang", "English") == "English" }
+    private var useEnglish: Boolean = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", docHeaders)
@@ -334,13 +335,6 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
     private fun ResultResponse.toDocument() = Jsoup.parseBodyFragment(result ?: "")
-
-    private fun okhttp3.OkHttpClient.Builder.rateLimitHost(
-        url: okhttp3.HttpUrl,
-        permits: Int,
-        period: Long,
-        unit: TimeUnit,
-    ) = addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(url, permits, period, unit))
 
     companion object {
         const val DECODE1_URL = "https://enc-dec.app/api/enc-kai?text="
