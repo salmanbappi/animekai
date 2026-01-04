@@ -1,44 +1,51 @@
 package eu.kanade.tachiyomi.animeextension.en.animekai
 
 import kotlinx.serialization.Serializable
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-
-data class VideoCode(
-    val type: String,
-    val serverId: String,
-    val serverName: String,
-)
-
-data class VideoData(
-    val iframe: String,
-    val serverName: String,
-)
 
 @Serializable
 data class ResultResponse(
-    val result: String,
-) {
-    fun toDocument(): Document {
-        return Jsoup.parseBodyFragment(result)
-    }
-}
+    val result: String? = null,
+)
 
 @Serializable
 data class IframeResponse(
     val result: IframeDto,
 )
 
-// {"url":"https:\/\/megaup.site\/e\/0cv1ZHy0WSyJcOLwFrpK6BPpCQ","skip":...}
 @Serializable
 data class IframeDto(
     val url: String,
-    val skip: SkipDto?,
+    val skip: SkipDto? = null,
 )
 
-// "skip":{"intro":[0,0],"outro":[0,0]}
 @Serializable
 data class SkipDto(
-    val intro: List<Int>?,
-    val outro: List<Int>?,
+    val intro: List<Int>? = null,
+    val outro: List<Int>? = null,
+)
+
+@Serializable
+data class MegaUpResult(
+    val sources: List<MegaUpSource>,
+    val tracks: List<MegaUpTrack>,
+    val download: String? = null,
+)
+
+@Serializable
+data class MegaUpSource(
+    val file: String,
+)
+
+@Serializable
+data class MegaUpTrack(
+    val file: String,
+    val label: String? = null,
+    val kind: String,
+    val default: Boolean = false,
+)
+
+@Serializable
+data class MegaDecodePostBody(
+    val text: String,
+    val agent: String,
 )

@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.animeextension.BuildConfig
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -12,8 +11,6 @@ import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
-import eu.kanade.tachiyomi.lib.megacloudextractor.MegaCloudExtractor
-import eu.kanade.tachiyomi.lib.rapidcloudextractor.RapidCloudExtractor
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
@@ -23,7 +20,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
@@ -41,9 +37,6 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
     }
 
     override val client: OkHttpClient = network.client
-
-    private val megaCloudExtractor by lazy { MegaCloudExtractor(client, headers, BuildConfig.MEGACLOUD_API) }
-    private val rapidCloudExtractor by lazy { RapidCloudExtractor(client, headers, preferences) }
 
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", headers)
@@ -86,11 +79,29 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
 
         val token = getSync("${DECODE1_URL}$aniId").trim()
         val ajaxUrl = "$baseUrl/ajax/episodes/list?ani_id=$aniId&_=$token"
+        
         val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(response.request.url.toString()))).execute()
-        val resultHtml = ajaxResponse.parseAs<ResultResponse>().result
+        val resultHtml = try {
+            ajaxResponse.parseAs<ResultResponse>().result
+        } catch (e: Exception) {
+            null
+        }
+
+        if (resultHtml.isNullOrBlank()) {
+            // Fallback: Parse episode count from page
+            val epCount = document.select("div.detail div:contains(Episodes:) span").text().toIntOrNull() ?: 1
+            val slug = response.request.url.toString().substringAfterLast("/").substringBefore("?")
+            return (1..epCount).map { i ->
+                SEpisode.create().apply {
+                    episode_number = i.toFloat()
+                    name = "Episode $i"
+                    url = "/watch/$slug?ep=$i"
+                }
+            }.reversed()
+        }
 
         val episodesDoc = Jsoup.parseBodyFragment(resultHtml)
-        // Select ALL links in ALL range lists to get more than 100 episodes
+        // Select ALL links in ALL range lists to get all episodes
         val episodeElements = episodesDoc.select("div.eplist.titles ul.range li > a[num][token]")
 
         return episodeElements.map { ep ->
@@ -100,7 +111,12 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
                 val epTitle = ep.selectFirst("span")?.text() ?: ""
                 name = if (epTitle.isNotBlank()) "Episode $num: $epTitle" else "Episode $num"
                 val extractedToken = ep.attr("token")
-                // Store token in URL for getVideoList
+                val langs = ep.attr("langs")
+                scanlator = when (langs) {
+                    "3", "2" -> "Sub & Dub"
+                    "1" -> "Sub"
+                    else -> ""
+                } + if (ep.hasClass("filler")) " [Filler]" else ""
                 url = "${response.request.url.encodedPath}?token=$extractedToken&ep=$num"
             }
         }.reversed()
@@ -108,6 +124,11 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
 
     // ============================ Video Links =============================
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
+        if (!episode.url.contains("?token=")) {
+            // This is a manually generated episode URL
+            return emptyList() // We need the token for now
+        }
+        
         val urlParts = episode.url.split("?token=")
         val watchUrl = baseUrl + urlParts[0]
         val tokenParts = urlParts[1].split("&ep=")
@@ -116,10 +137,13 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         val secondaryToken = getAsync("${DECODE1_URL}$episodeToken").trim()
         val ajaxUrl = "$baseUrl/ajax/links/list?token=$episodeToken&_=$secondaryToken"
         val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(watchUrl))).awaitSuccess()
-        val resultHtml = ajaxResponse.parseAs<ResultResponse>().result
+        val resultHtml = ajaxResponse.parseAs<ResultResponse>().result ?: return emptyList()
 
         val linksDoc = Jsoup.parseBodyFragment(resultHtml)
         val serverSpans = linksDoc.select("div.server-items span.server[data-lid]")
+
+        val megaUp = MegaUp(client)
+        val userAgent = headers["User-Agent"] ?: ""
 
         return serverSpans.flatMap { span ->
             val serverName = span.text()
@@ -129,21 +153,20 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
             val streamUrl = "$baseUrl/ajax/links/view?id=$serverId&_=$streamToken"
             
             val streamResponse = client.newCall(GET(streamUrl, apiHeaders(watchUrl))).awaitSuccess()
-            val encodedLink = streamResponse.parseAs<ResultResponse>().result.trim()
+            val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@flatMap emptyList<Video>()
             
             val decryptedResponse = client.newCall(GET("${DECODE2_URL}$encodedLink")).awaitSuccess()
             val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
             
             val type = span.closest(".server-items")?.attr("data-id") ?: "sub"
-            extractVideos(decryptedLink, type, serverName)
-        }
-    }
-
-    private fun extractVideos(url: String, type: String, serverName: String): List<Video> {
-        return when (serverName) {
-            "MegaCloud" -> megaCloudExtractor.getVideosFromUrl(url, type, serverName)
-            "RapidCloud" -> rapidCloudExtractor.getVideosFromUrl(url, type, serverName)
-            else -> emptyList()
+            val typeDisplay = when (type) {
+                "sub" -> "Subtitled"
+                "dub" -> "Dubbed"
+                "softsub" -> "Softsubbed"
+                else -> type
+            }
+            
+            megaUp.processUrl(decryptedLink, userAgent, "$typeDisplay | $serverName | ", baseUrl)
         }
     }
 
