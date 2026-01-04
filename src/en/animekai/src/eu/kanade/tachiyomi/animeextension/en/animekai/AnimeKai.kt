@@ -27,11 +27,52 @@ class AnimeKai : ZoroTheme(
         RapidCloudExtractor(client, headers, preferences)
     }
 
-    override fun extractVideo(server: VideoData): List<Video> {
-        return when (server.name) {
-            "MegaCloud" -> megaCloudExtractor.getVideosFromUrl(server.link, server.type, server.name)
-            "RapidCloud" -> rapidCloudExtractor.getVideosFromUrl(server.link, server.type, server.name)
-            else -> emptyList()
+        override fun extractVideo(server: VideoData): List<Video> {
+
+            return when (server.name) {
+
+                "MegaCloud" -> megaCloudExtractor.getVideosFromUrl(server.link, server.type, server.name)
+
+                "RapidCloud" -> rapidCloudExtractor.getVideosFromUrl(server.link, server.type, server.name)
+
+                else -> emptyList()
+
+            }
+
         }
+
+    
+
+        override fun episodeListRequest(anime: SAnime): Request {
+
+            val id = anime.url.substringAfterLast("-")
+
+            return GET("$baseUrl/ajax/episode/list?id=$id", apiHeaders(baseUrl + anime.url))
+
+        }
+
+    
+
+        override fun videoListRequest(episode: SEpisode): Request {
+
+            val id = episode.url.substringAfterLast("?ep=")
+
+            return GET("$baseUrl/ajax/episode/servers?episodeId=$id", apiHeaders(baseUrl + episode.url))
+
+        }
+
+    
+
+        private fun apiHeaders(referer: String) = headers.newBuilder()
+
+            .add("Accept", "*/*")
+
+            .add("X-Requested-With", "XMLHttpRequest")
+
+            .add("Referer", referer)
+
+            .build()
+
     }
-}
+
+    
