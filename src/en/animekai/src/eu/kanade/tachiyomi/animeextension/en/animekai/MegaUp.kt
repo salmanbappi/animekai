@@ -53,6 +53,7 @@ class MegaUp(private val client: OkHttpClient) {
 
             val postRequest = Request.Builder()
                 .url("https://enc-dec.app/api/dec-mega")
+                .headers(headers)
                 .post(postBody)
                 .build()
                 

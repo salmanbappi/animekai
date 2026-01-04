@@ -47,12 +47,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override val id: Long = 4567890123456L
 
-    private val preferences: SharedPreferences by getPreferencesLazy {
-        val domain = getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
-        if (domain.contains("bz")) {
-            edit().putString("preferred_domain", PREF_DOMAIN_DEFAULT).apply()
-        }
-    }
+    private val preferences: SharedPreferences by getPreferencesLazy()
 
     override val baseUrl: String
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
@@ -70,11 +65,13 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
-    private fun getDocHeaders(): Headers = headersBuilder().build()
+    private fun getDocHeaders(): Headers = headersBuilder()
+        .set("Referer", "$baseUrl/")
+        .build()
 
     private val megaUpExtractor by lazy { MegaUp(client) }
 
-    private val useEnglish: Boolean
+    private val useEnglish:
         get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
@@ -100,27 +97,25 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     // ============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
-        val url = if (query.isNotBlank()) {
-            "$baseUrl/browser?keyword=${URLEncoder.encode(query, "UTF-8")}&page=$page"
-        } else {
-            val builder = "$baseUrl/browser?page=$page".toHttpUrl().newBuilder()
-            filters.forEach { filter ->
-                when (filter) {
-                    is AnimeKaiFilters.TypesFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.GenresFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.StatusFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.SortByFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.SeasonsFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.YearsFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.RatingFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.CountriesFilter -> filter.addQueryParameters(builder)
-                    is AnimeKaiFilters.LanguagesFilter -> filter.addQueryParameters(builder)
-                    else -> {}
-                }
+        val builder = "$baseUrl/browser".toHttpUrl().newBuilder()
+        builder.addQueryParameter("keyword", query)
+        builder.addQueryParameter("page", page.toString())
+        
+        filters.forEach { filter ->
+            when (filter) {
+                is AnimeKaiFilters.TypesFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.GenresFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.StatusFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.SortByFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.SeasonsFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.YearsFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.RatingFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.CountriesFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.LanguagesFilter -> filter.addQueryParameters(builder)
+                else -> {}
             }
-            builder.build().toString()
         }
-        return GET(url, getDocHeaders())
+        return GET(builder.build().toString(), getDocHeaders())
     }
     override fun searchAnimeSelector(): String = popularAnimeSelector()
     override fun searchAnimeFromElement(element: Element): SAnime = popularAnimeFromElement(element)
@@ -201,24 +196,24 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
         val videoCodes = mutableListOf<VideoCode>()
-        linksDoc.select("div.server-items[data-id]").forEach {
-            val type = it.attr("data-id")
+        linksDoc.select("div.server-items[data-id]").forEach { items ->
+            val type = items.attr("data-id")
             if (type in enabledTypes) {
-                it.select("span.server[data-lid]").forEach {
-                    val serverName = it.text()
+                items.select("span.server[data-lid]").forEach { span ->
+                    val serverName = span.text()
                     if (serverName in enabledHosters) {
-                        videoCodes.add(VideoCode(type, it.attr("data-lid"), serverName))
+                        videoCodes.add(VideoCode(type, span.attr("data-lid"), serverName))
                     }
                 }
             }
         }
 
-        return videoCodes.parallelMapNotNull {
+        return videoCodes.parallelMapNotNull { code ->
             try {
-                val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${it.serverId}", getDocHeaders())).awaitSuccess()
+                val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${code.serverId}", getDocHeaders())).awaitSuccess()
                 val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
                 
-                val streamUrl = "$baseUrl/ajax/links/view?id=${it.serverId}&_=$streamToken"
+                val streamUrl = "$baseUrl/ajax/links/view?id=${code.serverId}&_=$streamToken"
                 val streamResponse = client.newCall(GET(streamUrl, getDocHeaders())).awaitSuccess()
                 val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@parallelMapNotNull null
                 
@@ -226,17 +221,23 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                     .toString()
                     .toRequestBody("application/json".toMediaTypeOrNull())
                 
-                val decryptedResponse = client.newCall(POST(DECODE2_URL, body = postBody)).awaitSuccess()
+                val decryptedResponse = client.newCall(
+                    Request.Builder()
+                        .url(DECODE2_URL)
+                        .headers(getDocHeaders())
+                        .post(postBody)
+                        .build()
+                ).awaitSuccess()
                 val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
                 
-                val typeDisplay = when (it.type) {
+                val typeDisplay = when (code.type) {
                     "sub" -> "Hard Sub"
                     "dub" -> "Dub & S-Sub"
                     "softsub" -> "Soft Sub"
-                    else -> it.type
+                    else -> code.type
                 }
                 
-                VideoData(decryptedLink, "$typeDisplay | ${it.serverName}")
+                VideoData(decryptedLink, "$typeDisplay | ${code.serverName}")
             } catch (e: Exception) {
                 null
             }
@@ -337,12 +338,6 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             listOf("sub", "dub", "softsub")
         )
     }
-
-    private fun apiHeaders(referer: String) = headers.newBuilder()
-        .add("Accept", "*/*")
-        .add("X-Requested-With", "XMLHttpRequest")
-        .add("Referer", referer)
-        .build()
 
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
