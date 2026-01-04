@@ -54,7 +54,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         }
     }
 
-    override val baseUrl:
+    override val baseUrl: String
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
     override val client: OkHttpClient = network.client.newBuilder()
@@ -72,7 +72,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val megaUpExtractor by lazy { MegaUp(client) }
 
-    private fun useEnglish(): Boolean = preferences.getString("preferred_title_lang", "English") == "English"
+    private val useEnglish: Boolean
+        get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", getDocHeaders())
@@ -80,7 +81,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun popularAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
         val poster = element.selectFirst("a.poster")!!
         setUrlWithoutDomain(poster.attr("href"))
-        title = if (useEnglish()) {
+        title = if (useEnglish) {
             element.selectFirst("a.title")?.text() ?: poster.attr("title") ?: "Unknown"
         } else {
             element.selectFirst("a.title")?.attr("data-jp") ?: element.selectFirst("a.title")?.text() ?: "Unknown"
@@ -129,7 +130,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val mainEntity = document.selectFirst("div#main-entity")
         if (mainEntity != null) {
             val titleElement = mainEntity.selectFirst("h1.title")
-            title = if (useEnglish()) {
+            title = if (useEnglish) {
                 titleElement?.text() ?: ""
             } else {
                 titleElement?.attr("data-jp") ?: titleElement?.text() ?: ""
@@ -369,7 +370,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         
         const val PREF_DOMAIN_DEFAULT = "https://anikai.to"
         val DOMAIN_ENTRIES = arrayOf("animekai.to", "animekai.cc", "animekai.ac", "anikai.to")
-        val DOMAIN_VALUES = arrayOf("https://animekai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
+        val DOMAIN_VALUES = arrayOf("https://anikai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
         
         val HOSTERS = listOf("Server 1", "Server 2")
         val DEFAULT_TYPES = setOf("sub", "dub", "softsub")
