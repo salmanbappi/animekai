@@ -21,6 +21,8 @@ import eu.kanade.tachiyomi.util.parseAs
 import extensions.utils.addListPreference
 import extensions.utils.addSetPreference
 import extensions.utils.getPreferencesLazy
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -53,16 +55,17 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
     override val client: OkHttpClient = network.client.newBuilder()
-        .addInterceptor(RateLimitInterceptor(5, 1, TimeUnit.SECONDS))
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .addInterceptor(RateLimitInterceptor(3, 1, TimeUnit.SECONDS))
+        .connectTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun headersBuilder(): Headers.Builder {
         return super.headersBuilder()
-            .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     }
 
     private fun getDocHeaders(): Headers = headersBuilder()
@@ -101,17 +104,17 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         builder.addQueryParameter("keyword", query)
         builder.addQueryParameter("page", page.toString())
         
-        filters.forEach { filter ->
-            when (filter) {
-                is AnimeKaiFilters.TypesFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.GenresFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.StatusFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.SortByFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.SeasonsFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.YearsFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.RatingFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.CountriesFilter -> filter.addQueryParameters(builder)
-                is AnimeKaiFilters.LanguagesFilter -> filter.addQueryParameters(builder)
+        filters.forEach {
+            when (it) {
+                is AnimeKaiFilters.TypesFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.GenresFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.StatusFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.SortByFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.SeasonsFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.YearsFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.RatingFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.CountriesFilter -> it.addQueryParameters(builder)
+                is AnimeKaiFilters.LanguagesFilter -> it.addQueryParameters(builder)
                 else -> {}
             }
         }
@@ -183,6 +186,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException()
     override fun videoUrlParse(document: Document): String = throw UnsupportedOperationException()
 
+    private val semaphore = Semaphore(2)
+
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
         val episodeToken = episode.url
         val secondaryTokenResponse = client.newCall(GET("${DECODE1_URL}$episodeToken", getDocHeaders())).awaitSuccess()
@@ -196,50 +201,52 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
         val videoCodes = mutableListOf<VideoCode>()
-        linksDoc.select("div.server-items[data-id]").forEach { items ->
-            val type = items.attr("data-id")
+        linksDoc.select("div.server-items[data-id]").forEach {
+            val type = it.attr("data-id")
             if (type in enabledTypes) {
-                items.select("span.server[data-lid]").forEach { span ->
-                    val serverName = span.text()
+                it.select("span.server[data-lid]").forEach {
+                    val serverName = it.text()
                     if (serverName in enabledHosters) {
-                        videoCodes.add(VideoCode(type, span.attr("data-lid"), serverName))
+                        videoCodes.add(VideoCode(type, it.attr("data-lid"), serverName))
                     }
                 }
             }
         }
 
-        return videoCodes.parallelMapNotNull { code ->
-            try {
-                val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${code.serverId}", getDocHeaders())).awaitSuccess()
-                val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
-                
-                val streamUrl = "$baseUrl/ajax/links/view?id=${code.serverId}&_=$streamToken"
-                val streamResponse = client.newCall(GET(streamUrl, getDocHeaders())).awaitSuccess()
-                val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@parallelMapNotNull null
-                
-                val postBody = buildJsonObject { put("text", encodedLink) }
-                    .toString()
-                    .toRequestBody("application/json".toMediaTypeOrNull())
-                
-                val decryptedResponse = client.newCall(
-                    Request.Builder()
-                        .url(DECODE2_URL)
-                        .headers(getDocHeaders())
-                        .post(postBody)
-                        .build()
-                ).awaitSuccess()
-                val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
-                
-                val typeDisplay = when (code.type) {
-                    "sub" -> "Hard Sub"
-                    "dub" -> "Dub & S-Sub"
-                    "softsub" -> "Soft Sub"
-                    else -> code.type
+        return videoCodes.parallelMapNotNull {
+            semaphore.withPermit {
+                try {
+                    val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${it.serverId}", getDocHeaders())).awaitSuccess()
+                    val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
+                    
+                    val streamUrl = "$baseUrl/ajax/links/view?id=${it.serverId}&_=$streamToken"
+                    val streamResponse = client.newCall(GET(streamUrl, getDocHeaders())).awaitSuccess()
+                    val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@parallelMapNotNull null
+                    
+                    val postBody = buildJsonObject { put("text", encodedLink) }
+                        .toString()
+                        .toRequestBody("application/json".toMediaTypeOrNull())
+                    
+                    val decryptedResponse = client.newCall(
+                        Request.Builder()
+                            .url(DECODE2_URL)
+                            .headers(getDocHeaders())
+                            .post(postBody)
+                            .build()
+                    ).awaitSuccess()
+                    val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
+                    
+                    val typeDisplay = when (it.type) {
+                        "sub" -> "Hard Sub"
+                        "dub" -> "Dub & S-Sub"
+                        "softsub" -> "Soft Sub"
+                        else -> it.type
+                    }
+                    
+                    VideoData(decryptedLink, "$typeDisplay | ${it.serverName}")
+                } catch (e: Exception) {
+                    null
                 }
-                
-                VideoData(decryptedLink, "$typeDisplay | ${code.serverName}")
-            } catch (e: Exception) {
-                null
             }
         }.parallelCatchingFlatMap { extractVideo(it) }
     }
@@ -338,12 +345,6 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             listOf("sub", "dub", "softsub")
         )
     }
-
-    private fun apiHeaders(referer: String) = headers.newBuilder()
-        .add("Accept", "*/*")
-        .add("X-Requested-With", "XMLHttpRequest")
-        .add("Referer", referer)
-        .build()
 
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
