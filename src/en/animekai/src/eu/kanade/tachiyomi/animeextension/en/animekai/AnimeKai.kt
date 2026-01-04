@@ -14,11 +14,11 @@ import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
+import eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
 import eu.kanade.tachiyomi.util.parseAs
-import extensions.utils.LazyMutable
 import extensions.utils.addListPreference
 import extensions.utils.addSetPreference
 import extensions.utils.getPreferencesLazy
@@ -57,11 +57,9 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override val baseUrl: String
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
-    override val client: OkHttpClient by lazy {
-        network.client.newBuilder()
-            .addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS))
-            .build()
-    }
+    override val client: OkHttpClient = network.client.newBuilder()
+        .addInterceptor(SpecificHostRateLimitInterceptor(PREF_DOMAIN_DEFAULT.toHttpUrl(), 5, 1, TimeUnit.SECONDS))
+        .build()
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -74,7 +72,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
 
-    private var useEnglish: Boolean = preferences.getString("preferred_title_lang", "English") == "English"
+    private val useEnglish:
+        get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", docHeaders)
@@ -210,11 +209,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                 else -> type
             }
 
-            items.select("span.server[data-lid]").parallelMapNotNull {
-                val serverName = it.text()
+            items.select("span.server[data-lid]").parallelMapNotNull { span ->
+                val serverName = span.text()
                 if (serverName !in enabledHosters) return@parallelMapNotNull null
                 
-                val serverId = it.attr("data-lid")
+                val serverId = span.attr("data-lid")
                 val streamTokenResponse = client.newCall(GET("${DECODE1_URL}$serverId", docHeaders)).awaitSuccess()
                 val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
                 
@@ -274,7 +273,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "%s",
             listOf("English", "Romaji"),
             listOf("English", "Romaji")
-        ) { useEnglish = it == "English" }
+        )
 
         screen.addListPreference(
             "preferred_quality",
@@ -308,8 +307,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "top",
             "Score display position",
             "%s",
-            listOf("top", "bottom", "none"),
-            listOf("Top of description", "Bottom of description", "Don't show")
+            listOf("Top of description", "Bottom of description", "Don't show"),
+            listOf("top", "bottom", "none")
         )
 
         screen.addSetPreference(
@@ -326,8 +325,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             DEFAULT_TYPES,
             "Enable/Disable Types",
             "Select which video types to show in the episode list.\nDisable the one you don't want to speed up loading.",
-            listOf("sub", "dub", "softsub"),
-            listOf("Hard Sub", "Dub & S-Sub", "Soft Sub")
+            listOf("Hard Sub", "Dub & S-Sub", "Soft Sub"),
+            listOf("sub", "dub", "softsub")
         )
     }
 
