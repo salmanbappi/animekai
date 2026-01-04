@@ -2,6 +2,8 @@ package eu.kanade.tachiyomi.animeextension.en.animekai
 
 import eu.kanade.tachiyomi.animeextension.BuildConfig
 
+import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+
 import eu.kanade.tachiyomi.animesource.model.SAnime
 
 import eu.kanade.tachiyomi.animesource.model.SEpisode
@@ -18,9 +20,13 @@ import eu.kanade.tachiyomi.network.GET
 
 import eu.kanade.tachiyomi.util.asJsoup
 
+import okhttp3.HttpUrl.Companion.toHttpUrl
+
 import okhttp3.Request
 
-import okhttp3.Response
+import org.jsoup.nodes.Document
+
+import org.jsoup.nodes.Element
 
 
 
@@ -56,7 +62,69 @@ class AnimeKai : ZoroTheme(
 
 
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/browser?sort=updated_date&page=$page", docHeaders)
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates?page=$page", docHeaders)
+
+
+
+    override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
+
+        val url = "$baseUrl/browser".toHttpUrl().newBuilder().apply {
+
+            addQueryParameter("page", page.toString())
+
+            if (query.isNotBlank()) {
+
+                addQueryParameter("keyword", query)
+
+            }
+
+        }.build()
+
+        return GET(url, docHeaders)
+
+    }
+
+
+
+    override fun popularAnimeSelector(): String = "div.aitem"
+
+
+
+    override fun popularAnimeFromElement(element: Element) = SAnime.create().apply {
+
+        element.selectFirst("a.poster")!!.let {
+
+            setUrlWithoutDomain(it.attr("href"))
+
+            thumbnail_url = it.selectFirst("img")?.attr("data-src")
+
+        }
+
+        title = element.selectFirst("a.title")!!.text()
+
+    }
+
+
+
+    override fun popularAnimeNextPageSelector() = "ul.pagination li.page-item a[rel=next]"
+
+
+
+    override fun animeDetailsParse(document: Document) = SAnime.create().apply {
+
+        thumbnail_url = document.selectFirst("div.poster img")?.attr("src")
+
+        title = document.selectFirst("h1.title")!!.text()
+
+        description = document.selectFirst("div.desc")?.text()
+
+        genre = document.select("div.detail a[href^='/genres/']").eachText().joinToString()
+
+        author = document.select("div.detail a[href^='/studios/']").eachText().joinToString()
+
+        status = parseStatus(document.select("div.detail div:contains(Status:) span").text())
+
+    }
 
 
 
@@ -119,3 +187,5 @@ class AnimeKai : ZoroTheme(
     }
 
 }
+
+
