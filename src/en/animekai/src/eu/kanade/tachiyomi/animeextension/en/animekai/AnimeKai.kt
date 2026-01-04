@@ -44,9 +44,9 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
     override val id: Long = 4567890123456L
 
     private val preferences: SharedPreferences by getPreferencesLazy {
-        val domain = it.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
+        val domain = getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
         if (domain.contains("bz")) {
-            it.edit().putString("preferred_domain", PREF_DOMAIN_DEFAULT).apply()
+            edit().putString("preferred_domain", PREF_DOMAIN_DEFAULT).apply()
         }
     }
 
