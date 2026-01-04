@@ -71,7 +71,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val megaUpExtractor by lazy { MegaUp(client) }
 
-    private val useEnglish:
+    private val useEnglish: Boolean
         get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
@@ -338,6 +338,12 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             listOf("sub", "dub", "softsub")
         )
     }
+
+    private fun apiHeaders(referer: String) = headers.newBuilder()
+        .add("Accept", "*/*")
+        .add("X-Requested-With", "XMLHttpRequest")
+        .add("Referer", referer)
+        .build()
 
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
