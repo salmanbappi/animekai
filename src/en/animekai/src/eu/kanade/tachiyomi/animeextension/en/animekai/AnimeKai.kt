@@ -67,25 +67,29 @@ class AnimeKai : ZoroTheme(
         status = parseStatus(document.select("div.detail div:contains(Status:) span").text())
     }
 
-    override fun episodeListRequest(anime: SAnime): Request {
-        val url = baseUrl + anime.url
-        val document = client.newCall(GET(url, headers)).execute().asJsoup()
-        val id = document.selectFirst("#watch-page")?.attr("data-id")
-            ?: throw Exception("Could not find anime ID")
-        return GET("$baseUrl/ajax/episode/list?id=$id", apiHeaders(url))
-    }
+    override fun episodeListRequest(anime: SAnime): Request = GET(baseUrl + anime.url, headers)
 
     override fun episodeListParse(response: Response): List<SEpisode> {
-        val result = response.parseAs<ResultResponse>().result
-        val document = Jsoup.parseBodyFragment(result)
-        return document.select(episodeListSelector())
-            .map(::episodeFromElement)
-            .reversed()
+        val document = response.asJsoup()
+        val epCount = document.select("div.detail div:contains(Episodes:) span").text().toIntOrNull() ?: 1
+        val slug = response.request.url.toString().substringAfterLast("/").substringBefore("?")
+        
+        return (1..epCount).map { i ->
+            SEpisode.create().apply {
+                episode_number = i.toFloat()
+                name = "Episode $i"
+                url = "/watch/$slug#ep=$i"
+            }
+        }.reversed()
     }
 
     override fun videoListRequest(episode: SEpisode): Request {
-        val id = episode.url.substringAfterLast("?ep=")
-        return GET("$baseUrl/ajax/episode/servers?episodeId=$id", apiHeaders(baseUrl + episode.url))
+        val url = baseUrl + episode.url.replace("#", "?")
+        val document = client.newCall(GET(url, headers)).execute().asJsoup()
+        val id = document.selectFirst("#watch-page")?.attr("data-id") ?: throw Exception("ID not found")
+        val epNum = episode.url.substringAfter("#ep=")
+        
+        return GET("$baseUrl/ajax/episode/servers?episodeId=$id&ep=$epNum", apiHeaders(url))
     }
 
     private fun apiHeaders(referer: String) = headers.newBuilder()
