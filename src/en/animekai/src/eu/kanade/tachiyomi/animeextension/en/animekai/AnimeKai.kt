@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
+import eu.kanade.tachiyomi.network.interceptor.specificHostRateLimit
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
@@ -60,7 +61,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override val client: OkHttpClient by LazyMutable {
         network.client.newBuilder()
-            .rateLimitHost(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
+            .specificHostRateLimit(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
             .build()
     }
 
@@ -163,8 +164,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val ajaxResponse = client.newCall(GET(ajaxUrl, docHeaders)).awaitSuccess()
         val episodesDoc = ajaxResponse.parseAs<ResultResponse>().toDocument()
 
-        return episodesDoc.select(episodeListSelector()).map {
-            episodeFromElement(it)
+        return episodesDoc.select(episodeListSelector()).map { ep ->
+            episodeFromElement(ep)
         }.reversed()
     }
 
@@ -180,7 +181,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "1" -> "Sub"
             else -> ""
         } + if (element.hasClass("filler")) " [Filler]" else ""
-        url = extractedToken // The working APK seems to use token as URL
+        url = extractedToken
     }
 
     // ============================ Video Links =============================
@@ -200,11 +201,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledTypes = preferences.getStringSet("type_selection", DEFAULT_TYPES) ?: DEFAULT_TYPES
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
-        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap {
-            val type = it.attr("data-id")
+        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap { items ->
+            val type = items.attr("data-id")
             if (type !in enabledTypes) return@flatMap emptyList<VideoData>()
             
-            it.select("span.server[data-lid]").parallelMapNotNull {
+            items.select("span.server[data-lid]").parallelMapNotNull {
                 val serverName = it.text()
                 if (serverName !in enabledHosters) return@parallelMapNotNull null
                 
@@ -242,77 +243,77 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         screen.addListPreference(
             "preferred_domain",
-            DOMAIN_VALUES,
-            DOMAIN_ENTRIES,
             PREF_DOMAIN_DEFAULT,
             "Preferred domain",
-            "%s"
+            "%s",
+            DOMAIN_ENTRIES,
+            DOMAIN_VALUES
         ) { 
-            baseUrl
-            headersBuilder().build() // Rebuild headers if domain changes
+            client
+            docHeaders
         }
 
         screen.addListPreference(
             "preferred_title_lang",
-            arrayOf("English", "Romaji"),
-            arrayOf("English", "Romaji"),
             "English",
             "Preferred title language",
-            "%s"
+            "%s",
+            listOf("English", "Romaji"),
+            listOf("English", "Romaji")
         ) { useEnglish = it == "English" }
 
         screen.addListPreference(
             "preferred_quality",
-            arrayOf("1080p", "720p", "480p", "360p"),
-            arrayOf("1080p", "720p", "480p", "360p"),
             "1080p",
             "Preferred quality",
-            "%s"
+            "%s",
+            listOf("1080p", "720p", "480p", "360p"),
+            listOf("1080p", "720p", "480p", "360p")
         )
 
         screen.addListPreference(
             "preferred_server",
-            HOSTERS.toTypedArray(),
-            HOSTERS.toTypedArray(),
             "Server 1",
             "Preferred Server",
-            "%s"
+            "%s",
+            HOSTERS,
+            HOSTERS
         )
 
         screen.addListPreference(
             "preferred_type",
-            arrayOf("[Hard Sub]", "[Soft Sub]", "[Dub & S-Sub]"),
-            arrayOf("[Hard Sub]", "[Soft Sub]", "[Dub & S-Sub]"),
             "[Soft Sub]",
             "Preferred Type",
-            "%s"
+            "%s",
+            listOf("[Hard Sub]", "[Soft Sub]", "[Dub & S-Sub]"),
+            listOf("[Hard Sub]", "[Soft Sub]", "[Dub & S-Sub]")
         )
 
         screen.addListPreference(
             "score_position",
-            arrayOf("top", "bottom", "none"),
-            arrayOf("Top of description", "Bottom of description", "Don't show"),
             "top",
             "Score display position",
-            "%s"
+            "%s",
+            listOf("top", "bottom", "none"),
+            listOf("Top of description", "Bottom of description", "Don't show")
         )
 
         screen.addSetPreference(
             "hoster_selection",
             HOSTERS.toSet(),
-            HOSTERS.toTypedArray(),
-            HOSTERS.toTypedArray(),
             "Enable/Disable Hosts",
-            "Select which video hosts to show in the episode list"
+            "Select which video hosts to show in the episode list",
+            HOSTERS,
+            HOSTERS
         )
 
         screen.addSetPreference(
             "type_selection",
             DEFAULT_TYPES,
-            arrayOf("Sub", "Dub", "Soft Sub"),
-            arrayOf("sub", "dub", "softsub"),
             "Enable/Disable Types",
-            "Select which video types to show in the episode list.\nDisable the one you don't want to speed up loading."
+            "Select which video types to show in the episode list.\nDisable the one you don't want to speed up loading.",
+            listOf("sub", "dub", "softsub"),
+            listOf("Sub", "Dub", "Soft Sub")
         )
     }
 
@@ -335,13 +336,6 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
     private fun ResultResponse.toDocument() = Jsoup.parseBodyFragment(result ?: "")
-
-    private fun okhttp3.OkHttpClient.Builder.rateLimitHost(
-        url: okhttp3.HttpUrl,
-        permits: Int,
-        period: Long,
-        unit: TimeUnit,
-    ) = addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(url, permits, period, unit))
 
     companion object {
         const val DECODE1_URL = "https://enc-dec.app/api/enc-kai?text="
