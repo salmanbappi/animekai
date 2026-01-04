@@ -15,8 +15,12 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parseAs
+import extensions.utils.getPreferencesLazy
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Headers
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,14 +33,20 @@ import java.net.URLEncoder
 
 class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
     override val name = "AnimeKai"
-    override val baseUrl = "https://anikai.to"
     override val lang = "en"
     override val supportsLatest = true
 
     override val id: Long = 4567890123456L
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    private val preferences: SharedPreferences by getPreferencesLazy {
+        val domain = it.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
+        if (domain.contains("bz")) {
+            it.edit().putString("preferred_domain", PREF_DOMAIN_DEFAULT).apply()
+        }
+    }
+
+    override val baseUrl by lazy {
+        preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
     }
 
     override val client: OkHttpClient = network.client
@@ -53,8 +63,27 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
 
     // ============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
-        val safeQuery = URLEncoder.encode(query, "UTF-8")
-        return GET("$baseUrl/browser?keyword=$safeQuery&page=$page", headers)
+        val url = if (query.isNotBlank()) {
+            "$baseUrl/browser?keyword=${URLEncoder.encode(query, "UTF-8")}&page=$page"
+        } else {
+            val builder = "$baseUrl/browser?page=$page".toHttpUrl().newBuilder()
+            filters.forEach {
+                when (it) {
+                    is AnimeKaiFilters.TypesFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.GenresFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.StatusFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.SortByFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.SeasonsFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.YearsFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.RatingFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.CountriesFilter -> it.addQueryParameters(builder)
+                    is AnimeKaiFilters.LanguagesFilter -> it.addQueryParameters(builder)
+                    else -> {}
+                }
+            }
+            builder.build().toString()
+        }
+        return GET(url, headers)
     }
     override fun searchAnimeParse(response: Response): AnimesPage = parseAnimesPage(response)
 
@@ -84,24 +113,20 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         val document = response.asJsoup()
         val aniId = document.selectFirst("#watch-page")?.attr("data-id")
             ?: document.selectFirst("div.rate-box")?.attr("data-id")
+            ?: document.selectFirst("div[data-id]")?.attr("data-id")
             ?: throw Exception("Anime ID not found")
 
         val token = getSync("${DECODE1_URL}$aniId").trim()
         val ajaxUrl = "$baseUrl/ajax/episodes/list?ani_id=$aniId&_=$token"
-        Log.d("AnimeKai", "Fetching episodes from: $ajaxUrl")
         
         val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(response.request.url.toString()))).execute()
         val resultHtml = try {
             ajaxResponse.parseAs<ResultResponse>().result
         } catch (e: Exception) {
-            Log.e("AnimeKai", "AJAX episode list failed: ${e.message}")
             null
         }
 
         if (resultHtml.isNullOrBlank()) {
-            // Fallback: Parse episode count from page
-            Log.d("AnimeKai", "Using fallback episode count")
-            // Prioritize span.sub as it contains currently released count
             val subText = document.selectFirst("div.info span.sub")?.text()
             val epText = document.selectFirst("div.detail div:contains(Episodes:) span")?.text()
             
@@ -109,41 +134,34 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
                 ?: epText?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
                 ?: 1
             
-            // If count is suspicious (like a year), default to 1
-            if (epCount > 2000) {
-                Log.d("AnimeKai", "Suspicious epCount $epCount, defaulting to 1")
-                epCount = 1
-            }
+            if (epCount > 2000) epCount = 1
             
-            Log.d("AnimeKai", "Fallback count: $epCount")
             val slug = response.request.url.toString().substringAfterLast("/").substringBefore("?")
-            return (1..epCount).map { i ->
+            return (1..epCount).map {
                 SEpisode.create().apply {
-                    episode_number = i.toFloat()
-                    name = "Episode $i"
-                    url = "/watch/$slug?ep=$i"
+                    episode_number = it.toFloat()
+                    name = "Episode $it"
+                    url = "/watch/$slug?ep=$it"
                 }
             }.reversed()
         }
 
         val episodesDoc = Jsoup.parseBodyFragment(resultHtml)
-        // Select ALL links in ALL range lists to get all episodes
         val episodeElements = episodesDoc.select("div.eplist.titles ul.range li > a[num][token]")
-        Log.d("AnimeKai", "Parsed ${episodeElements.size} episodes from AJAX")
 
-        return episodeElements.map { ep ->
+        return episodeElements.map {
             SEpisode.create().apply {
-                val num = ep.attr("num")
+                val num = it.attr("num")
                 episode_number = num.toFloatOrNull() ?: 0f
-                val epTitle = ep.selectFirst("span")?.text() ?: ""
+                val epTitle = it.selectFirst("span")?.text() ?: ""
                 name = if (epTitle.isNotBlank()) "Episode $num: $epTitle" else "Episode $num"
-                val extractedToken = ep.attr("token")
-                val langs = ep.attr("langs")
+                val extractedToken = it.attr("token")
+                val langs = it.attr("langs")
                 scanlator = when (langs) {
                     "3", "2" -> "Sub & Dub"
                     "1" -> "Sub"
                     else -> ""
-                } + if (ep.hasClass("filler")) " [Filler]" else ""
+                } + if (it.hasClass("filler")) " [Filler]" else ""
                 url = "${response.request.url.encodedPath}?token=$extractedToken&ep=$num"
             }
         }.reversed()
@@ -151,10 +169,7 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
 
     // ============================ Video Links =============================
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
-        if (!episode.url.contains("?token=")) {
-            // This is a manually generated episode URL
-            return emptyList() // We need the token for now
-        }
+        if (!episode.url.contains("?token=")) return emptyList()
         
         val urlParts = episode.url.split("?token=")
         val watchUrl = baseUrl + urlParts[0]
@@ -163,48 +178,44 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         
         val secondaryToken = getAsync("${DECODE1_URL}$episodeToken").trim()
         val ajaxUrl = "$baseUrl/ajax/links/list?token=$episodeToken&_=$secondaryToken"
-        Log.d("AnimeKai", "Fetching links from: $ajaxUrl")
         val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(watchUrl))).awaitSuccess()
         val resultHtml = ajaxResponse.parseAs<ResultResponse>().result ?: return emptyList()
 
         val linksDoc = Jsoup.parseBodyFragment(resultHtml)
         val serverItems = linksDoc.select("div.server-items[data-id]")
-        Log.d("AnimeKai", "Found ${serverItems.size} server categories")
 
         val megaUp = MegaUp(client)
         val userAgent = headers["User-Agent"] ?: ""
         
-        val enabledTypes = preferences.getStringSet("type_selection", setOf("sub", "dub", "softsub")) ?: emptySet()
-        val enabledHosters = preferences.getStringSet("hoster_selection", setOf("Server 1", "Server 2")) ?: emptySet()
+        val enabledTypes = preferences.getStringSet("type_selection", setOf("sub", "dub", "softsub")) ?: setOf("sub", "dub", "softsub")
+        val enabledHosters = preferences.getStringSet("hoster_selection", setOf("Server 1", "Server 2")) ?: setOf("Server 1", "Server 2")
 
-        return serverItems.flatMap { items ->
-            val type = items.attr("data-id")
+        return serverItems.flatMap {
+            val type = it.attr("data-id")
             if (type !in enabledTypes) return@flatMap emptyList<Video>()
             
-            val serverSpans = items.select("span.server[data-lid]")
-            serverSpans.flatMap { span ->
-                val serverName = span.text()
+            val serverSpans = it.select("span.server[data-lid]")
+            serverSpans.flatMap {
+                val serverName = it.text()
                 if (serverName !in enabledHosters) return@flatMap emptyList<Video>()
                 
-                val serverId = span.attr("data-lid")
-                
+                val serverId = it.attr("data-lid")
                 val streamToken = getAsync("${DECODE1_URL}$serverId").trim()
                 val streamUrl = "$baseUrl/ajax/links/view?id=$serverId&_=$streamToken"
                 
                 val streamResponse = client.newCall(GET(streamUrl, apiHeaders(watchUrl))).awaitSuccess()
                 val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@flatMap emptyList<Video>()
                 
-                val postBody = json.encodeToString(MegaDecodePostBody.serializer(), MegaDecodePostBody(encodedLink, userAgent))
+                val postBody = buildJsonObject {
+                    put("text", encodedLink)
+                }
+                    .toString()
                     .toRequestBody("application/json".toMediaTypeOrNull())
                 
                 val decryptedResponse = client.newCall(
-                    Request.Builder()
-                        .url(DECODE2_URL)
-                        .post(postBody)
-                        .build(),
+                    Request.Builder().url(DECODE2_URL).post(postBody).build(),
                 ).awaitSuccess()
                 val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
-                Log.d("AnimeKai", "Decrypted link for $serverName ($type): $decryptedLink")
                 
                 val typeDisplay = when (type) {
                     "sub" -> "Subtitled"
@@ -218,37 +229,16 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         }
     }
 
-    private fun parseAnimesPage(response: Response): AnimesPage {
-        val document = response.asJsoup()
-        val animeElements = document.select("div.aitem")
-        val animes = animeElements.map { element ->
-            SAnime.create().apply {
-                val poster = element.selectFirst("a.poster")!!
-                setUrlWithoutDomain(poster.attr("href"))
-                title = element.selectFirst("a.title")?.text() ?: poster.attr("title") ?: "Unknown"
-                thumbnail_url = poster.selectFirst("img")?.attr("data-src")
-            }
-        }
-        return AnimesPage(animes, document.selectFirst("ul.pagination a[rel=next]") != null)
-    }
-
-    private suspend fun getAsync(url: String, referer: String? = null): String {
-        val builder = Request.Builder().url(url)
-        if (referer != null) builder.header("Referer", referer)
-        return client.newCall(builder.build()).awaitSuccess().body.string()
-    }
-
-    private fun getSync(url: String): String {
-        return client.newCall(Request.Builder().url(url).build()).execute().body.string()
-    }
-
-    private fun apiHeaders(referer: String) = headers.newBuilder()
-        .add("Accept", "*/*")
-        .add("X-Requested-With", "XMLHttpRequest")
-        .add("Referer", referer)
-        .build()
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val domainPref = androidx.preference.ListPreference(screen.context).apply {
+            key = "preferred_domain"
+            title = "Preferred domain"
+            entries = arrayOf("animekai.to", "anikai.to", "animekai.ac", "animekai.cc")
+            entryValues = arrayOf("https://animekai.to", "https://anikai.to", "https://animekai.ac", "https://animekai.cc")
+            setDefaultValue(PREF_DOMAIN_DEFAULT)
+            summary = "%s"
+        }
+
         val titlePref = androidx.preference.ListPreference(screen.context).apply {
             key = "preferred_title_lang"
             title = "Preferred title language"
@@ -280,19 +270,51 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
             title = "Enable/Disable Hosts"
             entries = arrayOf("Server 1", "Server 2")
             entryValues = arrayOf("Server 1", "Server 2")
-            setDefaultValue(setOf("Server 1", "Server 2"))
+            setDefaultValue(setOf("Server 1", "Server 2") )
         }
 
+        screen.addPreference(domainPref)
         screen.addPreference(titlePref)
         screen.addPreference(qualityPref)
         screen.addPreference(typePref)
         screen.addPreference(hosterPref)
     }
 
-    override fun getFilterList(): AnimeFilterList = AnimeFilterList()
+    private fun parseAnimesPage(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val animeElements = document.select("div.aitem")
+        val animes = animeElements.map {
+            SAnime.create().apply {
+                val poster = it.selectFirst("a.poster")!!
+                setUrlWithoutDomain(poster.attr("href"))
+                title = it.selectFirst("a.title")?.text() ?: poster.attr("title") ?: "Unknown"
+                thumbnail_url = poster.selectFirst("img")?.attr("data-src")
+            }
+        }
+        return AnimesPage(animes, document.selectFirst("ul.pagination a[rel=next]") != null)
+    }
+
+    private suspend fun getAsync(url: String, referer: String? = null): String {
+        val builder = Request.Builder().url(url)
+        if (referer != null) builder.header("Referer", referer)
+        return client.newCall(builder.build()).awaitSuccess().body.string()
+    }
+
+    private fun getSync(url: String): String {
+        return client.newCall(Request.Builder().url(url).build()).execute().body.string()
+    }
+
+    private fun apiHeaders(referer: String) = headers.newBuilder()
+        .add("Accept", "*/*")
+        .add("X-Requested-With", "XMLHttpRequest")
+        .add("Referer", referer)
+        .build()
+
+    override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
     companion object {
         const val DECODE1_URL = "https://enc-dec.app/api/enc-kai?text="
         const val DECODE2_URL = "https://enc-dec.app/api/dec-kai"
+        const val PREF_DOMAIN_DEFAULT = "https://anikai.to"
     }
 }
