@@ -14,7 +14,6 @@ import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
-import eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
@@ -27,6 +26,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -58,7 +58,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
     override val client: OkHttpClient = network.client.newBuilder()
-        .addInterceptor(SpecificHostRateLimitInterceptor(PREF_DOMAIN_DEFAULT.toHttpUrl(), 5, 1, TimeUnit.SECONDS))
+        .addInterceptor(RateLimitInterceptor(5, 1, TimeUnit.SECONDS))
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -72,7 +72,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
 
-    private val useEnglish:
+    private val useEnglish: Boolean
         get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
@@ -262,8 +262,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             PREF_DOMAIN_DEFAULT,
             "Preferred domain",
             "%s",
-            DOMAIN_ENTRIES,
-            DOMAIN_VALUES
+            DOMAIN_ENTRIES.toList(),
+            DOMAIN_VALUES.toList()
         ) { docHeaders = headersBuilder().build() }
 
         screen.addListPreference(
@@ -330,12 +330,6 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         )
     }
 
-    private suspend fun getAsync(url: String, referer: String? = null): String {
-        val builder = Request.Builder().url(url)
-        if (referer != null) builder.header("Referer", referer)
-        return client.newCall(builder.build()).awaitSuccess().body.string()
-    }
-
     private fun getSync(url: String): String {
         return client.newCall(Request.Builder().url(url).build()).execute().body.string()
     }
@@ -350,13 +344,37 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private fun ResultResponse.toDocument() = Jsoup.parseBodyFragment(result ?: "")
 
+    class RateLimitInterceptor(
+        private val permits: Int,
+        private val period: Long,
+        private val unit: TimeUnit,
+    ) : Interceptor {
+        private val requestCounts = mutableListOf<Long>()
+
+        @Synchronized
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val now = System.currentTimeMillis()
+            val periodMs = unit.toMillis(period)
+
+            requestCounts.removeAll { it < now - periodMs }
+
+            if (requestCounts.size >= permits) {
+                val sleepTime = requestCounts.first() + periodMs - now
+                if (sleepTime > 0) Thread.sleep(sleepTime)
+            }
+
+            requestCounts.add(System.currentTimeMillis())
+            return chain.proceed(chain.request())
+        }
+    }
+
     companion object {
         const val DECODE1_URL = "https://enc-dec.app/api/enc-kai?text="
         const val DECODE2_URL = "https://enc-dec.app/api/dec-kai"
         
         const val PREF_DOMAIN_DEFAULT = "https://anikai.to"
-        val DOMAIN_ENTRIES = listOf("animekai.to", "animekai.cc", "animekai.ac", "anikai.to")
-        val DOMAIN_VALUES = listOf("https://anikai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
+        val DOMAIN_ENTRIES = arrayOf("animekai.to", "animekai.cc", "animekai.ac", "anikai.to")
+        val DOMAIN_VALUES = arrayOf("https://anikai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
         
         val HOSTERS = listOf("Server 1", "Server 2")
         val DEFAULT_TYPES = setOf("sub", "dub", "softsub")
