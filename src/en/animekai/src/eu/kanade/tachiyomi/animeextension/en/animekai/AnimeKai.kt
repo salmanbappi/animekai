@@ -18,6 +18,7 @@ import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
 import eu.kanade.tachiyomi.util.parseAs
+import extensions.utils.LazyMutable
 import extensions.utils.addListPreference
 import extensions.utils.addSetPreference
 import extensions.utils.getPreferencesLazy
@@ -37,6 +38,7 @@ import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 
 class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override val name = "AnimeKai"
@@ -52,11 +54,14 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         }
     }
 
-    override val baseUrl by lazy {
-        preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
-    }
+    override val baseUrl: String
+        get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
-    override val client: OkHttpClient = network.client
+    override val client: OkHttpClient by lazy {
+        network.client.newBuilder()
+            .addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS))
+            .build()
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -65,7 +70,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
-    private val docHeaders: Headers by lazy { headersBuilder().build() }
+    private var docHeaders: Headers = headersBuilder().build()
 
     private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
 
@@ -157,8 +162,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val ajaxResponse = client.newCall(GET(ajaxUrl, docHeaders)).awaitSuccess()
         val episodesDoc = ajaxResponse.parseAs<ResultResponse>().toDocument()
 
-        return episodesDoc.select(episodeListSelector()).map {
-            episodeFromElement(it)
+        return episodesDoc.select(episodeListSelector()).map { ep ->
+            episodeFromElement(ep)
         }.reversed()
     }
 
@@ -194,11 +199,18 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledTypes = preferences.getStringSet("type_selection", DEFAULT_TYPES) ?: DEFAULT_TYPES
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
-        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap {
-            val type = it.attr("data-id")
+        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap { items ->
+            val type = items.attr("data-id")
             if (type !in enabledTypes) return@flatMap emptyList<VideoData>()
             
-            it.select("span.server[data-lid]").parallelMapNotNull {
+            val typeDisplay = when (type) {
+                "sub" -> "Hard Sub"
+                "dub" -> "Dub & S-Sub"
+                "softsub" -> "Soft Sub"
+                else -> type
+            }
+
+            items.select("span.server[data-lid]").parallelMapNotNull {
                 val serverName = it.text()
                 if (serverName !in enabledHosters) return@parallelMapNotNull null
                 
@@ -217,7 +229,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                 val decryptedResponse = client.newCall(POST(DECODE2_URL, body = postBody)).awaitSuccess()
                 val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
                 
-                VideoData(decryptedLink, serverName)
+                VideoData(decryptedLink, "$typeDisplay | $serverName")
             }
         }
 
@@ -226,11 +238,23 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private suspend fun extractVideo(server: VideoData): List<Video> {
         return try {
-            megaUpExtractor.videosFromUrl(server.iframe, server.serverName)
+            megaUpExtractor.videosFromUrl(server.iframe, server.serverName + " | ")
         } catch (e: Exception) {
             Log.e("AnimeKai", "Error extracting videos for ${server.serverName}", e)
             emptyList()
         }
+    }
+
+    override fun List<Video>.sort(): List<Video> {
+        val quality = preferences.getString("preferred_quality", "1080p")!!
+        val server = preferences.getString("preferred_server", "Server 1")!!
+        val type = preferences.getString("preferred_type", "[Soft Sub]")!!
+
+        return this.sortedWith(
+            compareByDescending<Video> { it.quality.contains(quality) }
+                .thenByDescending { it.quality.contains(server) }
+                .thenByDescending { it.quality.contains(type.replace("[", "").replace("]", "")) }
+        )
     }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
@@ -241,7 +265,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "%s",
             DOMAIN_ENTRIES,
             DOMAIN_VALUES
-        )
+        ) { docHeaders = headersBuilder().build() }
 
         screen.addListPreference(
             "preferred_title_lang",
@@ -303,7 +327,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "Enable/Disable Types",
             "Select which video types to show in the episode list.\nDisable the one you don't want to speed up loading.",
             listOf("sub", "dub", "softsub"),
-            listOf("Sub", "Dub", "Soft Sub")
+            listOf("Hard Sub", "Dub & S-Sub", "Soft Sub")
         )
     }
 
