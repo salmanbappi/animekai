@@ -92,8 +92,8 @@ class MegaUp(private val client: OkHttpClient) {
             val playlistContent = playlistResponse.body.string()
             if (playlistContent.contains("#EXT-X-STREAM-INF")) {
                 val lines = playlistContent.lines()
-                val pattern = Regex("RESOLUTION=(\\\\d+)x(\\\\d+)")
-                val codecsPattern = Regex("CODECS=\"([^"]+)\"")
+                val pattern = Regex("RESOLUTION=(\\d+)x(\\d+)")
+                val codecsPattern = Regex("CODECS=\"([^\"]+)\"")
                 for (i in lines.indices) {
                     val line = lines[i]
                     if (line.startsWith("#EXT-X-STREAM-INF")) {
