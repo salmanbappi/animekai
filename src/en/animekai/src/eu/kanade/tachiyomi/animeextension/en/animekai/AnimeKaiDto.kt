@@ -56,3 +56,9 @@ data class VideoCode(
     val serverId: String,
     val serverName: String,
 )
+
+@Serializable
+data class VideoData(
+    val iframe: String,
+    val serverName: String,
+)
