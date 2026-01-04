@@ -14,7 +14,6 @@ import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
-import eu.kanade.tachiyomi.network.interceptor.specificHostRateLimit
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
@@ -59,9 +58,9 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
     }
 
-    override val client: OkHttpClient by LazyMutable {
+    override val client: OkHttpClient by lazy {
         network.client.newBuilder()
-            .specificHostRateLimit(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
+            .addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS))
             .build()
     }
 
@@ -72,9 +71,9 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
-    private val docHeaders by LazyMutable { headersBuilder().build() }
+    private var docHeaders by LazyMutable { headersBuilder().build() }
 
-    private val megaUpExtractor by LazyMutable { MegaUpExtractor(client, docHeaders) }
+    private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
 
     private var useEnglish by LazyMutable { preferences.getString("preferred_title_lang", "English") == "English" }
 
@@ -249,8 +248,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             DOMAIN_ENTRIES,
             DOMAIN_VALUES
         ) { 
-            client
-            docHeaders
+            docHeaders = headersBuilder().build()
         }
 
         screen.addListPreference(
@@ -294,8 +292,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "top",
             "Score display position",
             "%s",
-            listOf("top", "bottom", "none"),
-            listOf("Top of description", "Bottom of description", "Don't show")
+            listOf("Top of description", "Bottom of description", "Don't show"),
+            listOf("top", "bottom", "none")
         )
 
         screen.addSetPreference(
@@ -312,8 +310,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             DEFAULT_TYPES,
             "Enable/Disable Types",
             "Select which video types to show in the episode list.\nDisable the one you don't want to speed up loading.",
-            listOf("sub", "dub", "softsub"),
-            listOf("Sub", "Dub", "Soft Sub")
+            listOf("Sub", "Dub", "Soft Sub"),
+            listOf("sub", "dub", "softsub")
         )
     }
 
