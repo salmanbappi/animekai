@@ -49,3 +49,10 @@ data class MegaDecodePostBody(
     val text: String,
     val agent: String,
 )
+
+@Serializable
+data class VideoCode(
+    val type: String,
+    val serverId: String,
+    val serverName: String,
+)

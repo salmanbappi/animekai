@@ -105,7 +105,7 @@ class MegaUp(private val client: OkHttpClient) {
                         val streamUrl = lines.getOrNull(i + 1)?.trim()
                         if (!streamUrl.isNullOrEmpty() && currentQuality != null) {
                             val absoluteUrl = if (streamUrl.startsWith("http")) streamUrl else playlistUrl.substringBeforeLast("/") + "/" + streamUrl
-                            val qualityWithCodec = currentQuality + (if (currentCodecs != null) " [$currentCodecs]" else "")
+                            val qualityWithCodec = "$currentQuality${if (currentCodecs != null) " [$currentCodecs]" else ""}"
                             videoResults.add(
                                 Video(
                                     originalUrl,
