@@ -200,18 +200,20 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledTypes = preferences.getStringSet("type_selection", DEFAULT_TYPES) ?: DEFAULT_TYPES
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
-        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap {
-            val type = items.attr("data-id")
-            if (type !in enabledTypes) return@flatMap emptyList<VideoCode>()
-            
-            items.select("span.server[data-lid]").mapNotNull {
-                val serverName = span.text()
-                if (serverName !in enabledHosters) return@mapNotNull null
-                VideoCode(type, span.attr("data-lid"), serverName)
+        val videoCodes = mutableListOf<VideoCode>()
+        linksDoc.select("div.server-items[data-id]").forEach {
+            val type = it.attr("data-id")
+            if (type in enabledTypes) {
+                it.select("span.server[data-lid]").forEach {
+                    val serverName = it.text()
+                    if (serverName in enabledHosters) {
+                        videoCodes.add(VideoCode(type, it.attr("data-lid"), serverName))
+                    }
+                }
             }
         }
 
-        return embedLinks.parallelMapNotNull {
+        return videoCodes.parallelMapNotNull {
             try {
                 val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${it.serverId}", getDocHeaders())).awaitSuccess()
                 val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
