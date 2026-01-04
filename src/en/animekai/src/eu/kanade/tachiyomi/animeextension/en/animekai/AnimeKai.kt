@@ -14,7 +14,6 @@ import eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.network.awaitSuccess
-import eu.kanade.tachiyomi.network.interceptor.specificHostRateLimit
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
@@ -61,7 +60,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override val client: OkHttpClient by lazy {
         network.client.newBuilder()
-            .specificHostRateLimit(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
+            .rateLimitHost(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS)
             .build()
     }
 
@@ -201,11 +200,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledTypes = preferences.getStringSet("type_selection", DEFAULT_TYPES) ?: DEFAULT_TYPES
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
-        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap { items ->
-            val type = items.attr("data-id")
+        val embedLinks = linksDoc.select("div.server-items[data-id]").flatMap {
+            val type = it.attr("data-id")
             if (type !in enabledTypes) return@flatMap emptyList<VideoData>()
             
-            items.select("span.server[data-lid]").parallelMapNotNull {
+            it.select("span.server[data-lid]").parallelMapNotNull {
                 val serverName = it.text()
                 if (serverName !in enabledHosters) return@parallelMapNotNull null
                 
@@ -335,6 +334,13 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
     private fun ResultResponse.toDocument() = Jsoup.parseBodyFragment(result ?: "")
+
+    private fun okhttp3.OkHttpClient.Builder.rateLimitHost(
+        url: okhttp3.HttpUrl,
+        permits: Int,
+        period: Long,
+        unit: TimeUnit,
+    ) = addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(url, permits, period, unit))
 
     companion object {
         const val DECODE1_URL = "https://enc-dec.app/api/enc-kai?text="
