@@ -1,95 +1,174 @@
 package eu.kanade.tachiyomi.animeextension.en.animekai
 
+import android.app.Application
+import android.content.SharedPreferences
+import android.util.Log
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animeextension.BuildConfig
+import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
+import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import eu.kanade.tachiyomi.lib.megacloudextractor.MegaCloudExtractor
 import eu.kanade.tachiyomi.lib.rapidcloudextractor.RapidCloudExtractor
-import eu.kanade.tachiyomi.multisrc.zorotheme.ZoroTheme
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parseAs
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Headers
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import java.net.URLEncoder
 
-class AnimeKai : ZoroTheme(
-    "en",
-    "AnimeKai",
-    "https://anikai.to",
-    hosterNames = listOf(
-        "VidSrc",
-        "MegaCloud",
-        "RapidCloud",
-    ),
-) {
+class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
+    override val name = "AnimeKai"
+    override val baseUrl = "https://anikai.to"
+    override val lang = "en"
+    override val supportsLatest = true
+
     override val id: Long = 7537715367149829913L
 
-    override val ajaxRoute = ""
+    private val preferences: SharedPreferences by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    }
 
-    override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", docHeaders)
+    override val client: OkHttpClient = network.client
 
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates?page=$page", docHeaders)
+    private val megaCloudExtractor by lazy { MegaCloudExtractor(client, headers, BuildConfig.MEGACLOUD_API) }
+    private val rapidCloudExtractor by lazy { RapidCloudExtractor(client, headers, preferences) }
 
+    // ============================== Popular ===============================
+    override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", headers)
+    override fun popularAnimeParse(response: Response): AnimesPage = parseAnimesPage(response)
+
+    // ============================== Latest ===============================
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates?page=$page", headers)
+    override fun latestUpdatesParse(response: Response): AnimesPage = parseAnimesPage(response)
+
+    // ============================== Search ===============================
     override fun searchAnimeRequest(page: Int, query: String, filters: AnimeFilterList): Request {
-        val url = "$baseUrl/browser".toHttpUrl().newBuilder().apply {
-            addQueryParameter("page", page.toString())
-            if (query.isNotBlank()) {
-                addQueryParameter("keyword", query)
+        val safeQuery = URLEncoder.encode(query, "UTF-8")
+        return GET("$baseUrl/browser?keyword=$safeQuery&page=$page", headers)
+    }
+    override fun searchAnimeParse(response: Response): AnimesPage = parseAnimesPage(response)
+
+    // ============================== Details ===============================
+    override fun animeDetailsParse(response: Response): SAnime {
+        val document = response.asJsoup()
+        return SAnime.create().apply {
+            title = document.selectFirst("h1.title")?.text() ?: ""
+            thumbnail_url = document.selectFirst(".poster img")?.attr("src")
+            description = document.selectFirst("div.desc")?.text()
+            genre = document.select("div.detail a[href^='/genres/']").joinToString { it.text() }
+            author = document.select("div.detail a[href^='/studios/']").joinToString { it.text() }
+            status = when (document.selectFirst("div.detail div:contains(Status) span")?.text()?.lowercase()) {
+                "releasing" -> SAnime.ONGOING
+                "completed" -> SAnime.COMPLETED
+                else -> SAnime.UNKNOWN
             }
-        }.build()
-        return GET(url, docHeaders)
-    }
-
-    override fun popularAnimeSelector(): String = "div.aitem"
-
-    override fun popularAnimeFromElement(element: Element) = SAnime.create().apply {
-        element.selectFirst("a.poster")!!.let {
-            setUrlWithoutDomain(it.attr("href"))
-            thumbnail_url = it.selectFirst("img")?.attr("data-src")
         }
-        title = element.selectFirst("a.title")?.text() ?: element.selectFirst("a.poster")?.attr("title") ?: "Unknown"
     }
 
-    override fun popularAnimeNextPageSelector() = "ul.pagination li.page-item a[rel=next]"
-
-    override fun animeDetailsParse(document: Document) = SAnime.create().apply {
-        thumbnail_url = document.selectFirst("div.poster img")?.attr("src")
-        title = document.selectFirst("h1.title")!!.text()
-        description = document.selectFirst("div.desc")?.text()
-        genre = document.select("div.detail a[href^='/genres/']").eachText().joinToString()
-        author = document.select("div.detail a[href^='/studios/']").eachText().joinToString()
-        status = parseStatus(document.select("div.detail div:contains(Status:) span").text())
-    }
-
-    override fun episodeListRequest(anime: SAnime): Request = GET(baseUrl + anime.url, headers)
-
+    // ============================== Episodes ==============================
     override fun episodeListParse(response: Response): List<SEpisode> {
         val document = response.asJsoup()
-        val epCount = document.select("div.detail div:contains(Episodes:) span").text().toIntOrNull() ?: 1
-        val slug = response.request.url.toString().substringAfterLast("/").substringBefore("?")
-        
-        return (1..epCount).map { i ->
+        val aniId = document.selectFirst("#watch-page")?.attr("data-id")
+            ?: document.selectFirst("div.rate-box")?.attr("data-id")
+            ?: throw Exception("Anime ID not found")
+
+        val token = getSync("${DECODE1_URL}$aniId").trim()
+        val ajaxUrl = "$baseUrl/ajax/episodes/list?ani_id=$aniId&_=$token"
+        val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(response.request.url.toString()))).execute()
+        val resultHtml = ajaxResponse.parseAs<ResultResponse>().result
+
+        val episodesDoc = Jsoup.parseBodyFragment(resultHtml)
+        // Select ALL links in ALL range lists to get more than 100 episodes
+        val episodeElements = episodesDoc.select("div.eplist.titles ul.range li > a[num][token]")
+
+        return episodeElements.map { ep ->
             SEpisode.create().apply {
-                episode_number = i.toFloat()
-                name = "Episode $i"
-                url = "/watch/$slug#ep=$i"
+                val num = ep.attr("num")
+                episode_number = num.toFloatOrNull() ?: 0f
+                val epTitle = ep.selectFirst("span")?.text() ?: ""
+                name = if (epTitle.isNotBlank()) "Episode $num: $epTitle" else "Episode $num"
+                val extractedToken = ep.attr("token")
+                // Store token in URL for getVideoList
+                url = "${response.request.url.encodedPath}?token=$extractedToken&ep=$num"
             }
         }.reversed()
     }
 
-    override fun videoListRequest(episode: SEpisode): Request {
-        val url = baseUrl + episode.url.replace("#", "?")
-        val document = client.newCall(GET(url, headers)).execute().asJsoup()
-        val id = document.selectFirst("#watch-page")?.attr("data-id") ?: throw Exception("ID not found")
-        val epNum = episode.url.substringAfter("#ep=")
+    // ============================ Video Links =============================
+    override suspend fun getVideoList(episode: SEpisode): List<Video> {
+        val urlParts = episode.url.split("?token=")
+        val watchUrl = baseUrl + urlParts[0]
+        val tokenParts = urlParts[1].split("&ep=")
+        val episodeToken = tokenParts[0]
         
-        return GET("$baseUrl/ajax/episode/servers?episodeId=$id&ep=$epNum", apiHeaders(url))
+        val secondaryToken = getAsync("${DECODE1_URL}$episodeToken").trim()
+        val ajaxUrl = "$baseUrl/ajax/links/list?token=$episodeToken&_=$secondaryToken"
+        val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(watchUrl))).awaitSuccess()
+        val resultHtml = ajaxResponse.parseAs<ResultResponse>().result
+
+        val linksDoc = Jsoup.parseBodyFragment(resultHtml)
+        val serverSpans = linksDoc.select("div.server-items span.server[data-lid]")
+
+        return serverSpans.flatMap { span ->
+            val serverName = span.text()
+            val serverId = span.attr("data-lid")
+            
+            val streamToken = getAsync("${DECODE1_URL}$serverId").trim()
+            val streamUrl = "$baseUrl/ajax/links/view?id=$serverId&_=$streamToken"
+            
+            val streamResponse = client.newCall(GET(streamUrl, apiHeaders(watchUrl))).awaitSuccess()
+            val encodedLink = streamResponse.parseAs<ResultResponse>().result.trim()
+            
+            val decryptedResponse = client.newCall(GET("${DECODE2_URL}$encodedLink")).awaitSuccess()
+            val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
+            
+            val type = span.closest(".server-items")?.attr("data-id") ?: "sub"
+            extractVideos(decryptedLink, type, serverName)
+        }
+    }
+
+    private fun extractVideos(url: String, type: String, serverName: String): List<Video> {
+        return when (serverName) {
+            "MegaCloud" -> megaCloudExtractor.getVideosFromUrl(url, type, serverName)
+            "RapidCloud" -> rapidCloudExtractor.getVideosFromUrl(url, type, serverName)
+            else -> emptyList()
+        }
+    }
+
+    private fun parseAnimesPage(response: Response): AnimesPage {
+        val document = response.asJsoup()
+        val animeElements = document.select("div.aitem")
+        val animes = animeElements.map { element ->
+            SAnime.create().apply {
+                val poster = element.selectFirst("a.poster")!!
+                setUrlWithoutDomain(poster.attr("href"))
+                title = element.selectFirst("a.title")?.text() ?: poster.attr("title") ?: "Unknown"
+                thumbnail_url = poster.selectFirst("img")?.attr("data-src")
+            }
+        }
+        return AnimesPage(animes, document.selectFirst("ul.pagination a[rel=next]") != null)
+    }
+
+    private suspend fun getAsync(url: String, referer: String? = null): String {
+        val builder = Request.Builder().url(url)
+        if (referer != null) builder.header("Referer", referer)
+        return client.newCall(builder.build()).awaitSuccess().body.string()
+    }
+
+    private fun getSync(url: String): String {
+        return client.newCall(Request.Builder().url(url).build()).execute().body.string()
     }
 
     private fun apiHeaders(referer: String) = headers.newBuilder()
@@ -98,14 +177,12 @@ class AnimeKai : ZoroTheme(
         .add("Referer", referer)
         .build()
 
-    private val megaCloudExtractor by lazy { MegaCloudExtractor(client, headers, BuildConfig.MEGACLOUD_API) }
-    private val rapidCloudExtractor by lazy { RapidCloudExtractor(client, headers, preferences) }
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {}
 
-    override fun extractVideo(server: VideoData): List<Video> {
-        return when (server.name) {
-            "VidSrc", "MegaCloud" -> megaCloudExtractor.getVideosFromUrl(server.link, server.type, server.name)
-            "RapidCloud" -> rapidCloudExtractor.getVideosFromUrl(server.link, server.type, server.name)
-            else -> emptyList()
-        }
+    override fun getFilterList(): AnimeFilterList = AnimeFilterList()
+
+    companion object {
+        const val DECODE1_URL = "https://ilovekai.simplepostrequest.workers.dev/?ilovefeet="
+        const val DECODE2_URL = "https://ilovekai.simplepostrequest.workers.dev/?ilovearmpits="
     }
 }
