@@ -3,7 +3,7 @@ ext {
     extClass = '.AnimeKai'
     themePkg = 'zorotheme'
     baseUrl = 'https://animekai.to'
-    overrideVersionCode = 1023
+    overrideVersionCode = 1024
 }
 
 apply from: "$rootDir/common.gradle"
@@ -11,5 +11,4 @@ apply from: "$rootDir/common.gradle"
 dependencies {
     api(project(":lib:megacloud-extractor"))
     api(project(":lib:rapidcloud-extractor"))
-    api(project(":lib:playlist-utils"))
 }

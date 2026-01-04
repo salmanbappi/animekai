@@ -69,8 +69,6 @@ class MegaUpExtractor(
                     playlistUtils.extractFromHls(
                         playlistUrl = videoUrl,
                         referer = referer,
-                        masterHeaders = headers,
-                        videoHeaders = headers,
                         subtitleList = subtitleTracks,
                         videoNameGen = { quality -> "$prefix: $quality" },
                     )
@@ -81,8 +79,6 @@ class MegaUpExtractor(
                     playlistUtils.extractFromDash(
                         mpdUrl = videoUrl,
                         videoNameGen = { quality -> "$prefix: $quality" },
-                        mpdHeaders = headers,
-                        videoHeaders = headers,
                         subtitleList = subtitleTracks,
                         referer = referer,
                     )
