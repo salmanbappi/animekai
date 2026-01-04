@@ -39,12 +39,13 @@ class MegaUp(private val client: OkHttpClient) {
                 ?: throw IllegalArgumentException("No token found in URL: $url")
             
             val reqUrl = "$baseUrl/media/$token"
-            val response = client.newCall(GET(reqUrl)).awaitSuccess()
+            val response = client.newCall(GET(reqUrl, Headers.headersOf("User-Agent", userAgent))).awaitSuccess()
             val megaToken = response.parseAs<ResultResponse>().result ?: throw Exception("Mega token null")
             
             val postBody = MegaDecodePostBody(megaToken, userAgent)
             val postRequest = Request.Builder()
                 .url("https://enc-dec.app/api/dec-mega")
+                .headers(Headers.headersOf("User-Agent", userAgent))
                 .post(
                     json.encodeToString(MegaDecodePostBody.serializer(), postBody)
                         .toRequestBody("application/json".toMediaTypeOrNull()),
@@ -88,7 +89,7 @@ class MegaUp(private val client: OkHttpClient) {
         
         try {
             val playlistUrl = masterPlaylistUrl ?: reqUrl
-            val playlistResponse = client.newCall(GET(playlistUrl)).awaitSuccess()
+            val playlistResponse = client.newCall(GET(playlistUrl, headers)).awaitSuccess()
             val playlistContent = playlistResponse.body.string()
             if (playlistContent.contains("#EXT-X-STREAM-INF")) {
                 val lines = playlistContent.lines()

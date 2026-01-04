@@ -51,6 +51,11 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
 
     override val client: OkHttpClient = network.client
 
+    override fun headersBuilder(): Headers.Builder {
+        return super.headersBuilder()
+            .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
 
     // ============================== Popular ===============================
