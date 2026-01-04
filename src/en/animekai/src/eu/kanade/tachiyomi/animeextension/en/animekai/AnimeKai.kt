@@ -33,7 +33,7 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
     override val lang = "en"
     override val supportsLatest = true
 
-    override val id: Long = 7537715367149829913L
+    override val id: Long = 4567890123456L
 
     private val preferences: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
@@ -168,43 +168,53 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         val resultHtml = ajaxResponse.parseAs<ResultResponse>().result ?: return emptyList()
 
         val linksDoc = Jsoup.parseBodyFragment(resultHtml)
-        val serverSpans = linksDoc.select("div.server-items span.server[data-lid]")
-        Log.d("AnimeKai", "Found ${serverSpans.size} servers")
+        val serverItems = linksDoc.select("div.server-items[data-id]")
+        Log.d("AnimeKai", "Found ${serverItems.size} server categories")
 
         val megaUp = MegaUp(client)
         val userAgent = headers["User-Agent"] ?: ""
+        
+        val enabledTypes = preferences.getStringSet("type_selection", setOf("sub", "dub", "softsub")) ?: emptySet()
+        val enabledHosters = preferences.getStringSet("hoster_selection", setOf("Server 1", "Server 2")) ?: emptySet()
 
-        return serverSpans.flatMap { span ->
-            val serverName = span.text()
-            val serverId = span.attr("data-lid")
+        return serverItems.flatMap { items ->
+            val type = items.attr("data-id")
+            if (type !in enabledTypes) return@flatMap emptyList<Video>()
             
-            val streamToken = getAsync("${DECODE1_URL}$serverId").trim()
-            val streamUrl = "$baseUrl/ajax/links/view?id=$serverId&_=$streamToken"
-            
-            val streamResponse = client.newCall(GET(streamUrl, apiHeaders(watchUrl))).awaitSuccess()
-            val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@flatMap emptyList<Video>()
-            
-            val postBody = json.encodeToString(MegaDecodePostBody.serializer(), MegaDecodePostBody(encodedLink, userAgent))
-                .toRequestBody("application/json".toMediaTypeOrNull())
-            
-            val decryptedResponse = client.newCall(
-                Request.Builder()
-                    .url(DECODE2_URL)
-                    .post(postBody)
-                    .build(),
-            ).awaitSuccess()
-            val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
-            Log.d("AnimeKai", "Decrypted link for $serverName: $decryptedLink")
-            
-            val type = span.closest(".server-items")?.attr("data-id") ?: "sub"
-            val typeDisplay = when (type) {
-                "sub" -> "Subtitled"
-                "dub" -> "Dubbed"
-                "softsub" -> "Softsubbed"
-                else -> type
+            val serverSpans = items.select("span.server[data-lid]")
+            serverSpans.flatMap { span ->
+                val serverName = span.text()
+                if (serverName !in enabledHosters) return@flatMap emptyList<Video>()
+                
+                val serverId = span.attr("data-lid")
+                
+                val streamToken = getAsync("${DECODE1_URL}$serverId").trim()
+                val streamUrl = "$baseUrl/ajax/links/view?id=$serverId&_=$streamToken"
+                
+                val streamResponse = client.newCall(GET(streamUrl, apiHeaders(watchUrl))).awaitSuccess()
+                val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@flatMap emptyList<Video>()
+                
+                val postBody = json.encodeToString(MegaDecodePostBody.serializer(), MegaDecodePostBody(encodedLink, userAgent))
+                    .toRequestBody("application/json".toMediaTypeOrNull())
+                
+                val decryptedResponse = client.newCall(
+                    Request.Builder()
+                        .url(DECODE2_URL)
+                        .post(postBody)
+                        .build(),
+                ).awaitSuccess()
+                val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
+                Log.d("AnimeKai", "Decrypted link for $serverName ($type): $decryptedLink")
+                
+                val typeDisplay = when (type) {
+                    "sub" -> "Subtitled"
+                    "dub" -> "Dubbed"
+                    "softsub" -> "Softsubbed"
+                    else -> type
+                }
+                
+                megaUp.processUrl(decryptedLink, userAgent, "$typeDisplay | $serverName | ", baseUrl)
             }
-            
-            megaUp.processUrl(decryptedLink, userAgent, "$typeDisplay | $serverName | ", baseUrl)
         }
     }
 
@@ -238,7 +248,46 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         .add("Referer", referer)
         .build()
 
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {}
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val titlePref = androidx.preference.ListPreference(screen.context).apply {
+            key = "preferred_title_lang"
+            title = "Preferred title language"
+            entries = arrayOf("English", "Romaji")
+            entryValues = arrayOf("English", "Romaji")
+            setDefaultValue("English")
+            summary = "%s"
+        }
+
+        val qualityPref = androidx.preference.ListPreference(screen.context).apply {
+            key = "preferred_quality"
+            title = "Preferred quality"
+            entries = arrayOf("1080p", "720p", "480p", "360p")
+            entryValues = arrayOf("1080p", "720p", "480p", "360p")
+            setDefaultValue("1080p")
+            summary = "%s"
+        }
+
+        val typePref = androidx.preference.MultiSelectListPreference(screen.context).apply {
+            key = "type_selection"
+            title = "Enable/Disable Types"
+            entries = arrayOf("Sub", "Dub", "Soft Sub")
+            entryValues = arrayOf("sub", "dub", "softsub")
+            setDefaultValue(setOf("sub", "dub", "softsub"))
+        }
+
+        val hosterPref = androidx.preference.MultiSelectListPreference(screen.context).apply {
+            key = "hoster_selection"
+            title = "Enable/Disable Hosts"
+            entries = arrayOf("Server 1", "Server 2")
+            entryValues = arrayOf("Server 1", "Server 2")
+            setDefaultValue(setOf("Server 1", "Server 2"))
+        }
+
+        screen.addPreference(titlePref)
+        screen.addPreference(qualityPref)
+        screen.addPreference(typePref)
+        screen.addPreference(hosterPref)
+    }
 
     override fun getFilterList(): AnimeFilterList = AnimeFilterList()
 
