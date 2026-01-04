@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parseAs
+import kotlinx.serialization.json.Json
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -39,6 +40,8 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
     }
 
     override val client: OkHttpClient = network.client
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     // ============================== Popular ===============================
     override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", headers)
@@ -81,19 +84,23 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
 
         val token = getSync("${DECODE1_URL}$aniId").trim()
         val ajaxUrl = "$baseUrl/ajax/episodes/list?ani_id=$aniId&_=$token"
+        Log.d("AnimeKai", "Fetching episodes from: $ajaxUrl")
         
         val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(response.request.url.toString()))).execute()
         val resultHtml = try {
             ajaxResponse.parseAs<ResultResponse>().result
         } catch (e: Exception) {
+            Log.e("AnimeKai", "AJAX episode list failed: ${e.message}")
             null
         }
 
         if (resultHtml.isNullOrBlank()) {
             // Fallback: Parse episode count from page
-            val epCount = document.select("div.detail div:contains(Episodes:) span").text().toIntOrNull()
-                ?: document.select("div.info span.sub").text().toIntOrNull()
+            Log.d("AnimeKai", "Using fallback episode count")
+            val epCount = document.select("div.detail div:contains(Episodes:) span").text().let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+                ?: document.select("div.info span.sub").text().let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
                 ?: 1
+            Log.d("AnimeKai", "Fallback count: $epCount")
             val slug = response.request.url.toString().substringAfterLast("/").substringBefore("?")
             return (1..epCount).map { i ->
                 SEpisode.create().apply {
@@ -107,6 +114,7 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         val episodesDoc = Jsoup.parseBodyFragment(resultHtml)
         // Select ALL links in ALL range lists to get all episodes
         val episodeElements = episodesDoc.select("div.eplist.titles ul.range li > a[num][token]")
+        Log.d("AnimeKai", "Parsed ${episodeElements.size} episodes from AJAX")
 
         return episodeElements.map { ep ->
             SEpisode.create().apply {
@@ -140,11 +148,13 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         
         val secondaryToken = getAsync("${DECODE1_URL}$episodeToken").trim()
         val ajaxUrl = "$baseUrl/ajax/links/list?token=$episodeToken&_=$secondaryToken"
+        Log.d("AnimeKai", "Fetching links from: $ajaxUrl")
         val ajaxResponse = client.newCall(GET(ajaxUrl, apiHeaders(watchUrl))).awaitSuccess()
         val resultHtml = ajaxResponse.parseAs<ResultResponse>().result ?: return emptyList()
 
         val linksDoc = Jsoup.parseBodyFragment(resultHtml)
         val serverSpans = linksDoc.select("div.server-items span.server[data-lid]")
+        Log.d("AnimeKai", "Found ${serverSpans.size} servers")
 
         val megaUp = MegaUp(client)
         val userAgent = headers["User-Agent"] ?: ""
@@ -159,9 +169,7 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
             val streamResponse = client.newCall(GET(streamUrl, apiHeaders(watchUrl))).awaitSuccess()
             val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@flatMap emptyList<Video>()
             
-            val type = span.closest(".server-items")?.attr("data-id") ?: "sub"
-            val videoCode = VideoCode(type, encodedLink, serverName)
-            val postBody = json.encodeToString(VideoCode.serializer(), videoCode)
+            val postBody = json.encodeToString(MegaDecodePostBody.serializer(), MegaDecodePostBody(encodedLink, userAgent))
                 .toRequestBody("application/json".toMediaTypeOrNull())
             
             val decryptedResponse = client.newCall(
@@ -171,7 +179,9 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
                     .build(),
             ).awaitSuccess()
             val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
+            Log.d("AnimeKai", "Decrypted link for $serverName: $decryptedLink")
             
+            val type = span.closest(".server-items")?.attr("data-id") ?: "sub"
             val typeDisplay = when (type) {
                 "sub" -> "Subtitled"
                 "dub" -> "Dubbed"
@@ -182,8 +192,6 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
             megaUp.processUrl(decryptedLink, userAgent, "$typeDisplay | $serverName | ", baseUrl)
         }
     }
-
-    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
     private fun parseAnimesPage(response: Response): AnimesPage {
         val document = response.asJsoup()
