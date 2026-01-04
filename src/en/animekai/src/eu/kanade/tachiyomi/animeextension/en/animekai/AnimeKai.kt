@@ -62,14 +62,18 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
     override fun animeDetailsParse(response: Response): SAnime {
         val document = response.asJsoup()
         return SAnime.create().apply {
-            title = document.selectFirst("h1.title")?.text() ?: ""
+            title = if (preferences.getString("preferred_title_lang", "English") == "English") {
+                document.selectFirst("h1.title")?.text() ?: ""
+            } else {
+                document.selectFirst("h1.title")?.attr("data-jp") ?: document.selectFirst("h1.title")?.text() ?: ""
+            }
             thumbnail_url = document.selectFirst(".poster img")?.attr("src")
             description = document.selectFirst("div.desc")?.text()
-            genre = document.select("div.detail a[href^='/genres/']").joinToString { it.text() }
-            author = document.select("div.detail a[href^='/studios/']").joinToString { it.text() }
-            status = when (document.selectFirst("div.detail div:contains(Status) span")?.text()?.lowercase()) {
+            genre = document.select("div.detail div:contains(Genres) span a").joinToString { it.text() }
+            author = document.select("div.detail div:contains(Studios) span a").joinToString { it.text() }
+            status = when (document.selectFirst("div.detail div:contains(Status) span")?.text()?.lowercase()?.trim()) {
                 "releasing" -> SAnime.ONGOING
-                "completed" -> SAnime.COMPLETED
+                "completed", "finished" -> SAnime.COMPLETED
                 else -> SAnime.UNKNOWN
             }
         }
@@ -97,9 +101,20 @@ class AnimeKai : AnimeHttpSource(), ConfigurableAnimeSource {
         if (resultHtml.isNullOrBlank()) {
             // Fallback: Parse episode count from page
             Log.d("AnimeKai", "Using fallback episode count")
-            val epCount = document.select("div.detail div:contains(Episodes:) span").text().let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
-                ?: document.select("div.info span.sub").text().let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+            // Prioritize span.sub as it contains currently released count
+            val subText = document.selectFirst("div.info span.sub")?.text()
+            val epText = document.selectFirst("div.detail div:contains(Episodes:) span")?.text()
+            
+            var epCount = subText?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+                ?: epText?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
                 ?: 1
+            
+            // If count is suspicious (like a year), default to 1
+            if (epCount > 2000) {
+                Log.d("AnimeKai", "Suspicious epCount $epCount, defaulting to 1")
+                epCount = 1
+            }
+            
             Log.d("AnimeKai", "Fallback count: $epCount")
             val slug = response.request.url.toString().substringAfterLast("/").substringBefore("?")
             return (1..epCount).map { i ->
