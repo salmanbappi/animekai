@@ -18,7 +18,6 @@ import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelMapNotNull
 import eu.kanade.tachiyomi.util.parseAs
-import extensions.utils.LazyMutable
 import extensions.utils.addListPreference
 import extensions.utils.addSetPreference
 import extensions.utils.getPreferencesLazy
@@ -38,7 +37,6 @@ import org.jsoup.nodes.Element
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 
 class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override val name = "AnimeKai"
@@ -58,11 +56,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
     }
 
-    override val client: OkHttpClient by lazy {
-        network.client.newBuilder()
-            .addInterceptor(eu.kanade.tachiyomi.network.interceptor.SpecificHostRateLimitInterceptor(baseUrl.toHttpUrl(), 5, 1, TimeUnit.SECONDS))
-            .build()
-    }
+    override val client: OkHttpClient = network.client
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -71,7 +65,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
-    private var docHeaders: Headers = headersBuilder().build()
+    private val docHeaders: Headers by lazy { headersBuilder().build() }
 
     private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
 
@@ -163,8 +157,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val ajaxResponse = client.newCall(GET(ajaxUrl, docHeaders)).awaitSuccess()
         val episodesDoc = ajaxResponse.parseAs<ResultResponse>().toDocument()
 
-        return episodesDoc.select(episodeListSelector()).map { ep ->
-            episodeFromElement(ep)
+        return episodesDoc.select(episodeListSelector()).map {
+            episodeFromElement(it)
         }.reversed()
     }
 
@@ -247,9 +241,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "%s",
             DOMAIN_ENTRIES,
             DOMAIN_VALUES
-        ) { 
-            docHeaders = headersBuilder().build()
-        }
+        )
 
         screen.addListPreference(
             "preferred_title_lang",
@@ -292,8 +284,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "top",
             "Score display position",
             "%s",
-            listOf("Top of description", "Bottom of description", "Don't show"),
-            listOf("top", "bottom", "none")
+            listOf("top", "bottom", "none"),
+            listOf("Top of description", "Bottom of description", "Don't show")
         )
 
         screen.addSetPreference(
@@ -310,8 +302,8 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             DEFAULT_TYPES,
             "Enable/Disable Types",
             "Select which video types to show in the episode list.\nDisable the one you don't want to speed up loading.",
-            listOf("Sub", "Dub", "Soft Sub"),
-            listOf("sub", "dub", "softsub")
+            listOf("sub", "dub", "softsub"),
+            listOf("Sub", "Dub", "Soft Sub")
         )
     }
 
@@ -341,7 +333,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         
         const val PREF_DOMAIN_DEFAULT = "https://anikai.to"
         val DOMAIN_ENTRIES = listOf("animekai.to", "animekai.cc", "animekai.ac", "anikai.to")
-        val DOMAIN_VALUES = listOf("https://animekai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
+        val DOMAIN_VALUES = listOf("https://anikai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
         
         val HOSTERS = listOf("Server 1", "Server 2")
         val DEFAULT_TYPES = setOf("sub", "dub", "softsub")
