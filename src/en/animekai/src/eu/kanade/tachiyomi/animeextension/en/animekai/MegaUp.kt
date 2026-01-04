@@ -6,7 +6,10 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.util.parseAs
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -39,17 +42,18 @@ class MegaUp(private val client: OkHttpClient) {
                 ?: throw IllegalArgumentException("No token found in URL: $url")
             
             val reqUrl = "$baseUrl/media/$token"
-            val response = client.newCall(GET(reqUrl, Headers.headersOf("User-Agent", userAgent))).awaitSuccess()
+            val headers = Headers.Builder().add("User-Agent", userAgent).build()
+            val response = client.newCall(GET(reqUrl, headers)).awaitSuccess()
             val megaToken = response.parseAs<ResultResponse>().result ?: throw Exception("Mega token null")
             
-            val postBody = MegaDecodePostBody(megaToken, userAgent)
+            val postBody = buildJsonObject {
+                put("text", megaToken)
+                put("agent", userAgent)
+            }.toString().toRequestBody("application/json".toMediaTypeOrNull())
+
             val postRequest = Request.Builder()
                 .url("https://enc-dec.app/api/dec-mega")
-                .headers(Headers.headersOf("User-Agent", userAgent))
-                .post(
-                    json.encodeToString(MegaDecodePostBody.serializer(), postBody)
-                        .toRequestBody("application/json".toMediaTypeOrNull()),
-                )
+                .post(postBody)
                 .build()
                 
             val postResponse = client.newCall(postRequest).awaitSuccess()
@@ -60,8 +64,7 @@ class MegaUp(private val client: OkHttpClient) {
                 ?: megaUpResult.sources.firstOrNull()?.file
                 
             val subtitleTracks = megaUpResult.tracks
-                .filter { it.kind == "captions" && it.file.endsWith(".vtt") }
-                .sortedByDescending { it.default }
+                .filter { it.kind == "captions" || it.kind == "subtitles" }
                 .map { Track(it.file, it.label ?: "Unknown") }
                 
             buildVideoResults(masterPlaylistUrl, url, subtitleTracks, qualityPrefix, url, userAgent, referer)
@@ -94,23 +97,19 @@ class MegaUp(private val client: OkHttpClient) {
             if (playlistContent.contains("#EXT-X-STREAM-INF")) {
                 val lines = playlistContent.lines()
                 val pattern = Regex("RESOLUTION=(\\d+)x(\\d+)")
-                val codecsPattern = Regex("CODECS=\"([^\"]+)\"")
                 for (i in lines.indices) {
                     val line = lines[i]
                     if (line.startsWith("#EXT-X-STREAM-INF")) {
                         val match = pattern.find(line)
                         val height = match?.groupValues?.getOrNull(2)
-                        val currentQuality = if (height != null) "${height}p" else null
-                        val codecsMatch = codecsPattern.find(line)
-                        val currentCodecs = codecsMatch?.groupValues?.getOrNull(1)
+                        val currentQuality = if (height != null) "${height}p" else "Auto"
                         val streamUrl = lines.getOrNull(i + 1)?.trim()
-                        if (!streamUrl.isNullOrEmpty() && currentQuality != null) {
+                        if (!streamUrl.isNullOrEmpty()) {
                             val absoluteUrl = if (streamUrl.startsWith("http")) streamUrl else playlistUrl.substringBeforeLast("/") + "/" + streamUrl
-                            val qualityWithCodec = "$currentQuality${if (currentCodecs != null) " [$currentCodecs]" else ""}"
                             videoResults.add(
                                 Video(
                                     originalUrl,
-                                    "$prefix$qualityWithCodec",
+                                    "$prefix$currentQuality",
                                     absoluteUrl,
                                     headers,
                                     subtitleTracks,
@@ -119,8 +118,8 @@ class MegaUp(private val client: OkHttpClient) {
                         }
                     }
                 }
-            } else if (playlistContent.contains("#EXTINF")) {
-                videoResults.add(Video(originalUrl, "${prefix}Default", playlistUrl, headers, subtitleTracks))
+            } else {
+                videoResults.add(Video(originalUrl, "${prefix}Auto", playlistUrl, headers, subtitleTracks))
             }
         } catch (e: Exception) {
             Log.e(tag, "Error building videos: ${e.message}")

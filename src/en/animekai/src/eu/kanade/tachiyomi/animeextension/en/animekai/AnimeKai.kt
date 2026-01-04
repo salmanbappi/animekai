@@ -54,7 +54,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         }
     }
 
-    override val baseUrl: String
+    override val baseUrl:
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
     override val client: OkHttpClient = network.client.newBuilder()
@@ -68,20 +68,19 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
-    private var docHeaders: Headers = headersBuilder().build()
+    private fun getDocHeaders(): Headers = headersBuilder().build()
 
-    private val megaUpExtractor by lazy { MegaUpExtractor(client, docHeaders) }
+    private val megaUpExtractor by lazy { MegaUp(client) }
 
-    private val useEnglish: Boolean
-        get() = preferences.getString("preferred_title_lang", "English") == "English"
+    private fun useEnglish(): Boolean = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
-    override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", docHeaders)
+    override fun popularAnimeRequest(page: Int): Request = GET("$baseUrl/trending?page=$page", getDocHeaders())
     override fun popularAnimeSelector(): String = "div.aitem"
     override fun popularAnimeFromElement(element: Element): SAnime = SAnime.create().apply {
         val poster = element.selectFirst("a.poster")!!
         setUrlWithoutDomain(poster.attr("href"))
-        title = if (useEnglish) {
+        title = if (useEnglish()) {
             element.selectFirst("a.title")?.text() ?: poster.attr("title") ?: "Unknown"
         } else {
             element.selectFirst("a.title")?.attr("data-jp") ?: element.selectFirst("a.title")?.text() ?: "Unknown"
@@ -91,7 +90,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun popularAnimeNextPageSelector(): String = "ul.pagination a[rel=next]"
 
     // ============================== Latest ===============================
-    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates?page=$page", docHeaders)
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/updates?page=$page", getDocHeaders())
     override fun latestUpdatesSelector(): String = popularAnimeSelector()
     override fun latestUpdatesFromElement(element: Element): SAnime = popularAnimeFromElement(element)
     override fun latestUpdatesNextPageSelector(): String = popularAnimeNextPageSelector()
@@ -118,7 +117,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             }
             builder.build().toString()
         }
-        return GET(url, docHeaders)
+        return GET(url, getDocHeaders())
     }
     override fun searchAnimeSelector(): String = popularAnimeSelector()
     override fun searchAnimeFromElement(element: Element): SAnime = popularAnimeFromElement(element)
@@ -130,7 +129,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val mainEntity = document.selectFirst("div#main-entity")
         if (mainEntity != null) {
             val titleElement = mainEntity.selectFirst("h1.title")
-            title = if (useEnglish) {
+            title = if (useEnglish()) {
                 titleElement?.text() ?: ""
             } else {
                 titleElement?.attr("data-jp") ?: titleElement?.text() ?: ""
@@ -154,11 +153,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val document = response.asJsoup()
         val aniId = document.selectFirst("div[data-id]")?.attr("data-id") ?: throw Exception("Anime ID not found")
 
-        val tokenResponse = client.newCall(GET("${DECODE1_URL}$aniId", docHeaders)).awaitSuccess()
+        val tokenResponse = client.newCall(GET("${DECODE1_URL}$aniId", getDocHeaders())).awaitSuccess()
         val token = tokenResponse.parseAs<ResultResponse>().result ?: throw Exception("Token null")
 
         val ajaxUrl = "$baseUrl/ajax/episodes/list?ani_id=$aniId&_=$token"
-        val ajaxResponse = client.newCall(GET(ajaxUrl, docHeaders)).awaitSuccess()
+        val ajaxResponse = client.newCall(GET(ajaxUrl, getDocHeaders())).awaitSuccess()
         val episodesDoc = ajaxResponse.parseAs<ResultResponse>().toDocument()
 
         return episodesDoc.select(episodeListSelector()).map { ep ->
@@ -188,11 +187,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
         val episodeToken = episode.url
-        val secondaryTokenResponse = client.newCall(GET("${DECODE1_URL}$episodeToken", docHeaders)).awaitSuccess()
+        val secondaryTokenResponse = client.newCall(GET("${DECODE1_URL}$episodeToken", getDocHeaders())).awaitSuccess()
         val secondaryToken = secondaryTokenResponse.parseAs<ResultResponse>().result ?: return emptyList()
 
         val ajaxUrl = "$baseUrl/ajax/links/list?token=$episodeToken&_=$secondaryToken"
-        val ajaxResponse = client.newCall(GET(ajaxUrl, docHeaders)).awaitSuccess()
+        val ajaxResponse = client.newCall(GET(ajaxUrl, getDocHeaders())).awaitSuccess()
         val linksDoc = ajaxResponse.parseAs<ResultResponse>().toDocument()
 
         val enabledTypes = preferences.getStringSet("type_selection", DEFAULT_TYPES) ?: DEFAULT_TYPES
@@ -214,11 +213,11 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                 if (serverName !in enabledHosters) return@parallelMapNotNull null
                 
                 val serverId = span.attr("data-lid")
-                val streamTokenResponse = client.newCall(GET("${DECODE1_URL}$serverId", docHeaders)).awaitSuccess()
+                val streamTokenResponse = client.newCall(GET("${DECODE1_URL}$serverId", getDocHeaders())).awaitSuccess()
                 val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
                 
                 val streamUrl = "$baseUrl/ajax/links/view?id=$serverId&_=$streamToken"
-                val streamResponse = client.newCall(GET(streamUrl, docHeaders)).awaitSuccess()
+                val streamResponse = client.newCall(GET(streamUrl, getDocHeaders())).awaitSuccess()
                 val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@parallelMapNotNull null
                 
                 val postBody = buildJsonObject { put("text", encodedLink) }
@@ -237,7 +236,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private suspend fun extractVideo(server: VideoData): List<Video> {
         return try {
-            megaUpExtractor.videosFromUrl(server.iframe, server.serverName + " | ")
+            megaUpExtractor.processUrl(server.iframe, headersBuilder().build()["User-Agent"]!!, server.serverName + " | ", baseUrl)
         } catch (e: Exception) {
             Log.e("AnimeKai", "Error extracting videos for ${server.serverName}", e)
             emptyList()
@@ -264,7 +263,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             "%s",
             DOMAIN_ENTRIES.toList(),
             DOMAIN_VALUES.toList()
-        ) { docHeaders = headersBuilder().build() }
+        )
 
         screen.addListPreference(
             "preferred_title_lang",
@@ -330,10 +329,6 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         )
     }
 
-    private fun getSync(url: String): String {
-        return client.newCall(Request.Builder().url(url).build()).execute().body.string()
-    }
-
     private fun apiHeaders(referer: String) = headers.newBuilder()
         .add("Accept", "*/*")
         .add("X-Requested-With", "XMLHttpRequest")
@@ -374,7 +369,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         
         const val PREF_DOMAIN_DEFAULT = "https://anikai.to"
         val DOMAIN_ENTRIES = arrayOf("animekai.to", "animekai.cc", "animekai.ac", "anikai.to")
-        val DOMAIN_VALUES = arrayOf("https://anikai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
+        val DOMAIN_VALUES = arrayOf("https://animekai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
         
         val HOSTERS = listOf("Server 1", "Server 2")
         val DEFAULT_TYPES = setOf("sub", "dub", "softsub")
