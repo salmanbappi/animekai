@@ -56,10 +56,46 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override val client: OkHttpClient = network.client.newBuilder()
         .addInterceptor(RateLimitInterceptor(3, 1, TimeUnit.SECONDS))
+        .addInterceptor(SubtitleInterceptor())
         .connectTimeout(45, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .writeTimeout(45, TimeUnit.SECONDS)
         .build()
+
+    private class SubtitleInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            val url = request.url.toString()
+            if (!url.contains("#fixsub")) return chain.proceed(request)
+
+            val cleanUrl = url.substringBefore("#fixsub")
+            val newRequest = request.newBuilder()
+                .url(cleanUrl)
+                .build()
+
+            val response = chain.proceed(newRequest)
+            if (!response.isSuccessful) return response
+
+            val body = response.body.string()
+            val fixedBody = FIX_SUBTITLE_REGEX.replace(body) { matchResult ->
+                val lineCount = matchResult.groupValues[1].count { it == '\n' }
+                "\n" + "&nbsp;\n".repeat(lineCount - 1)
+            }
+
+            val newBody = okhttp3.ResponseBody.create(
+                "text/vtt".toMediaTypeOrNull(),
+                fixedBody,
+            )
+
+            return response.newBuilder()
+                .body(newBody)
+                .build()
+        }
+
+        companion object {
+            private val FIX_SUBTITLE_REGEX = Regex("""${'$'}(\n{2,})(?!(?:\d+:)*\d+(?:\.\d+)?\s-+>\s(?:\d+:)*\d+(?:\.\d+)?)""", RegexOption.MULTILINE)
+        }
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
 

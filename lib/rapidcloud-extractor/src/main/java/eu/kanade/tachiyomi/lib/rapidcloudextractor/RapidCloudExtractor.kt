@@ -134,9 +134,8 @@ class RapidCloudExtractor(
 
         val subtitles = videos.first().tracks
             ?.filter { it.kind == "captions" }
-            ?.map { Track(it.file, it.label) }
+            ?.map { Track(it.file + "#fixsub", it.label) }
             .orEmpty()
-            .let(playlistUtils::fixSubtitles)
 
         return videos.flatMap { video ->
             playlistUtils.extractFromHls(

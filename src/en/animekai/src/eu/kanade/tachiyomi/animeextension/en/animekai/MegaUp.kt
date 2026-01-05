@@ -70,7 +70,7 @@ class MegaUp(private val client: OkHttpClient) {
                 
             val subtitleTracks = megaUpResult.tracks
                 .filter { it.kind == "captions" || it.kind == "subtitles" }
-                .map { Track(it.file, it.label ?: "Unknown") }
+                .map { Track(it.file + "#fixsub", it.label ?: "Unknown") }
                 
             buildVideoResults(masterPlaylistUrl, url, subtitleTracks, qualityPrefix, url, userAgent)
         } catch (e: Exception) {

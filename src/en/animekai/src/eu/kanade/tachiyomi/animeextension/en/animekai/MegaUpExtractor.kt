@@ -143,7 +143,7 @@ class MegaUpExtractor(
             return tracks
                 .filter { it.kind == "captions" && it.file.endsWith(".vtt") }
                 .sortedByDescending { it.default }
-                .map { Track(it.file, it.label ?: "Unknown") }
+                .map { Track(it.file + "#fixsub", it.label ?: "Unknown") }
         }
     }
 
