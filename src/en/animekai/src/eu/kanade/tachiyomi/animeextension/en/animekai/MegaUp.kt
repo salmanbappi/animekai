@@ -42,8 +42,13 @@ class MegaUp(private val client: OkHttpClient) {
                 ?: throw IllegalArgumentException("No token found in URL: $url")
             
             val reqUrl = "$baseUrl/media/$token"
-            val headers = Headers.Builder().add("User-Agent", userAgent).build()
-            val response = client.newCall(GET(reqUrl, headers)).awaitSuccess()
+            // Important: Use the iframe URL as referer for the media request
+            val mediaHeaders = Headers.Builder()
+                .add("User-Agent", userAgent)
+                .add("Referer", url)
+                .build()
+                
+            val response = client.newCall(GET(reqUrl, mediaHeaders)).awaitSuccess()
             val megaToken = response.parseAs<ResultResponse>().result ?: throw Exception("Mega token null")
             
             val postBody = buildJsonObject {
@@ -53,7 +58,7 @@ class MegaUp(private val client: OkHttpClient) {
 
             val postRequest = Request.Builder()
                 .url("https://enc-dec.app/api/dec-mega")
-                .headers(headers)
+                .headers(mediaHeaders)
                 .post(postBody)
                 .build()
                 
@@ -67,7 +72,7 @@ class MegaUp(private val client: OkHttpClient) {
                 .filter { it.kind == "captions" || it.kind == "subtitles" }
                 .map { Track(it.file, it.label ?: "Unknown") }
                 
-            buildVideoResults(masterPlaylistUrl, url, subtitleTracks, qualityPrefix, url, userAgent, referer)
+            buildVideoResults(masterPlaylistUrl, url, subtitleTracks, qualityPrefix, url, userAgent)
         } catch (e: Exception) {
             Log.e(tag, "Error processing URL: ${e.message}")
             emptyList()
@@ -81,13 +86,13 @@ class MegaUp(private val client: OkHttpClient) {
         qualityPrefix: String?,
         originalUrl: String,
         userAgent: String,
-        referer: String?,
     ): List<Video> {
         val videoResults = mutableListOf<Video>()
         val prefix = qualityPrefix ?: "MegaUp - "
+        // Use the original iframe URL as the Referer for the actual video stream
         val headers = Headers.Builder().apply {
             add("User-Agent", userAgent)
-            if (!referer.isNullOrBlank()) add("Referer", referer)
+            add("Referer", originalUrl)
         }.build()
         
         try {
@@ -96,7 +101,7 @@ class MegaUp(private val client: OkHttpClient) {
             val playlistContent = playlistResponse.body.string()
             if (playlistContent.contains("#EXT-X-STREAM-INF")) {
                 val lines = playlistContent.lines()
-                val pattern = Regex("RESOLUTION=(\\\\d+)x(\\\\d+)")
+                val pattern = Regex("RESOLUTION=(\\d+)x(\\d+)")
                 for (i in lines.indices) {
                     val line = lines[i]
                     if (line.startsWith("#EXT-X-STREAM-INF")) {
@@ -108,7 +113,7 @@ class MegaUp(private val client: OkHttpClient) {
                             val absoluteUrl = if (streamUrl.startsWith("http")) streamUrl else playlistUrl.substringBeforeLast("/") + "/" + streamUrl
                             videoResults.add(
                                 Video(
-                                    originalUrl,
+                                    absoluteUrl, // Use direct URL for playback
                                     "$prefix$currentQuality",
                                     absoluteUrl,
                                     headers,
@@ -119,7 +124,7 @@ class MegaUp(private val client: OkHttpClient) {
                     }
                 }
             } else {
-                videoResults.add(Video(originalUrl, "${prefix}Auto", playlistUrl, headers, subtitleTracks))
+                videoResults.add(Video(playlistUrl, "${prefix}Auto", playlistUrl, headers, subtitleTracks))
             }
         } catch (e: Exception) {
             Log.e(tag, "Error building videos: ${e.message}")
