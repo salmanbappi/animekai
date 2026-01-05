@@ -57,9 +57,9 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override val client: OkHttpClient = network.client.newBuilder()
         .addInterceptor(RateLimitInterceptor(3, 1, TimeUnit.SECONDS))
         .addInterceptor(SubtitleInterceptor())
-        .connectTimeout(45, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
-        .writeTimeout(45, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
     private class SubtitleInterceptor : Interceptor {
@@ -99,16 +99,18 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    private val videoCache = mutableMapOf<String, List<Video>>()
+
     override fun headersBuilder(): Headers.Builder {
         return super.headersBuilder()
-            .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     }
 
     private fun getDocHeaders(): Headers = headersBuilder()
         .set("Referer", "$baseUrl/")
         .build()
 
-    private val megaUpExtractor by lazy { MegaUp(client) }
+    private val megaUpExtractor by lazy { MegaUpExtractor(client, headersBuilder().build()) }
 
     private val useEnglish: Boolean
         get() = preferences.getString("preferred_title_lang", "English") == "English"
@@ -222,16 +224,20 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
     override fun videoFromElement(element: Element): Video = throw UnsupportedOperationException()
     override fun videoUrlParse(document: Document): String = throw UnsupportedOperationException()
 
-    private val semaphore = Semaphore(2)
+    private val semaphore = Semaphore(3)
 
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
+        val cacheKey = episode.url
+        videoCache[cacheKey]?.let { return it }
+
         val episodeToken = episode.url
         val secondaryTokenResponse = client.newCall(GET("${DECODE1_URL}$episodeToken", getDocHeaders())).awaitSuccess()
         val secondaryToken = secondaryTokenResponse.parseAs<ResultResponse>().result ?: return emptyList()
 
         val ajaxUrl = "$baseUrl/ajax/links/list?token=$episodeToken&_=$secondaryToken"
         val ajaxResponse = client.newCall(GET(ajaxUrl, getDocHeaders())).awaitSuccess()
-        val linksDoc = ajaxResponse.parseAs<ResultResponse>().toDocument()
+        val linksHtml = ajaxResponse.parseAs<ResultResponse>().result ?: return emptyList()
+        val linksDoc = Jsoup.parseBodyFragment(linksHtml)
 
         val enabledTypes = preferences.getStringSet("type_selection", DEFAULT_TYPES) ?: DEFAULT_TYPES
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
@@ -249,7 +255,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             }
         }
 
-        return videoCodes.parallelMapNotNull { code ->
+        val videos = videoCodes.parallelMapNotNull { code ->
             semaphore.withPermit {
                 try {
                     val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${code.serverId}", getDocHeaders())).awaitSuccess()
@@ -279,19 +285,25 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                         else -> code.type
                     }
                     
-                    VideoData(decryptedLink, "$typeDisplay | ${code.serverName}")
+                    extractVideo(decryptedLink, "$typeDisplay | ${code.serverName}")
                 } catch (e: Exception) {
                     null
                 }
             }
-        }.parallelCatchingFlatMap { extractVideo(it) }
+        }.flatten()
+
+        return videos.also {
+            if (it.isNotEmpty()) {
+                videoCache[cacheKey] = it
+            }
+        }
     }
 
-    private suspend fun extractVideo(server: VideoData): List<Video> {
+    private suspend fun extractVideo(iframe: String, serverName: String): List<Video> {
         return try {
-            megaUpExtractor.processUrl(server.iframe, headersBuilder().build()["User-Agent"]!!, server.serverName + " | ", baseUrl)
+            megaUpExtractor.videosFromUrl(iframe, serverName)
         } catch (e: Exception) {
-            Log.e("AnimeKai", "Error extracting videos for ${server.serverName}", e)
+            Log.e("AnimeKai", "Error extracting videos for $serverName", e)
             emptyList()
         }
     }
