@@ -51,7 +51,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
-    override val baseUrl:
+    override val baseUrl: String
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
     override val client: OkHttpClient = network.client.newBuilder()
@@ -74,7 +74,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val megaUpExtractor by lazy { MegaUp(client) }
 
-    private val useEnglish:
+    private val useEnglish: Boolean
         get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
@@ -213,13 +213,13 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
             }
         }
 
-        return videoCodes.parallelMapNotNull {
+        return videoCodes.parallelMapNotNull { code ->
             semaphore.withPermit {
                 try {
-                    val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${it.serverId}", getDocHeaders())).awaitSuccess()
+                    val streamTokenResponse = client.newCall(GET("${DECODE1_URL}${code.serverId}", getDocHeaders())).awaitSuccess()
                     val streamToken = streamTokenResponse.parseAs<ResultResponse>().result ?: return@parallelMapNotNull null
                     
-                    val streamUrl = "$baseUrl/ajax/links/view?id=${it.serverId}&_=$streamToken"
+                    val streamUrl = "$baseUrl/ajax/links/view?id=${code.serverId}&_=$streamToken"
                     val streamResponse = client.newCall(GET(streamUrl, getDocHeaders())).awaitSuccess()
                     val encodedLink = streamResponse.parseAs<ResultResponse>().result?.trim() ?: return@parallelMapNotNull null
                     
@@ -236,14 +236,14 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
                     ).awaitSuccess()
                     val decryptedLink = decryptedResponse.parseAs<IframeResponse>().result.url.trim()
                     
-                    val typeDisplay = when (it.type) {
+                    val typeDisplay = when (code.type) {
                         "sub" -> "Hard Sub"
                         "dub" -> "Dub & S-Sub"
                         "softsub" -> "Soft Sub"
-                        else -> it.type
+                        else -> code.type
                     }
                     
-                    VideoData(decryptedLink, "$typeDisplay | ${it.serverName}")
+                    VideoData(decryptedLink, "$typeDisplay | ${code.serverName}")
                 } catch (e: Exception) {
                     null
                 }
