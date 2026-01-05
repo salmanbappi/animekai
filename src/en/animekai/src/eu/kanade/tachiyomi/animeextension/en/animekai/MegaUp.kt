@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.animeextension.en.animekai
 
 import android.util.Log
-import android.util.Log
 import eu.kanade.tachiyomi.animesource.model.Track
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.lib.playlistutils.PlaylistUtils
@@ -106,5 +105,4 @@ class MegaUp(private val client: OkHttpClient) {
             emptyList()
         }
     }
-}
 }
