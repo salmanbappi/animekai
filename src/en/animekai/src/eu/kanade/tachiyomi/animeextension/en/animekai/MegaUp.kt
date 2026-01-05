@@ -58,8 +58,7 @@ class MegaUp(private val client: OkHttpClient) {
                 .build()
                 
             val postResponse = client.newCall(postRequest).awaitSuccess()
-            val decodedResult = postResponse.parseAs<ResultResponse>().result ?: throw Exception("Decoded result null")
-            val megaUpResult = json.decodeFromString<MegaUpResult>(decodedResult)
+            val megaUpResult = postResponse.parseAs<MegaUpResponse>().result
             
             val masterPlaylistUrl = megaUpResult.sources.firstOrNull { it.file.contains("list") && it.file.endsWith(".m3u8") }?.file
                 ?: megaUpResult.sources.firstOrNull()?.file
@@ -97,7 +96,7 @@ class MegaUp(private val client: OkHttpClient) {
             val playlistContent = playlistResponse.body.string()
             if (playlistContent.contains("#EXT-X-STREAM-INF")) {
                 val lines = playlistContent.lines()
-                val pattern = Regex("RESOLUTION=(\\d+)x(\\d+)")
+                val pattern = Regex("RESOLUTION=(\\\\d+)x(\\\\d+)")
                 for (i in lines.indices) {
                     val line = lines[i]
                     if (line.startsWith("#EXT-X-STREAM-INF")) {

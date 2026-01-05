@@ -51,7 +51,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
-    override val baseUrl: String
+    override val baseUrl:
         get() = preferences.getString("preferred_domain", PREF_DOMAIN_DEFAULT)!!
 
     override val client: OkHttpClient = network.client.newBuilder()
@@ -65,7 +65,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     override fun headersBuilder(): Headers.Builder {
         return super.headersBuilder()
-            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36")
     }
 
     private fun getDocHeaders(): Headers = headersBuilder()
@@ -74,7 +74,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
 
     private val megaUpExtractor by lazy { MegaUp(client) }
 
-    private val useEnglish: Boolean
+    private val useEnglish:
         get() = preferences.getString("preferred_title_lang", "English") == "English"
 
     // ============================== Popular ===============================
@@ -104,17 +104,17 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         builder.addQueryParameter("keyword", query)
         builder.addQueryParameter("page", page.toString())
         
-        filters.forEach {
-            when (it) {
-                is AnimeKaiFilters.TypesFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.GenresFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.StatusFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.SortByFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.SeasonsFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.YearsFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.RatingFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.CountriesFilter -> it.addQueryParameters(builder)
-                is AnimeKaiFilters.LanguagesFilter -> it.addQueryParameters(builder)
+        filters.forEach { filter ->
+            when (filter) {
+                is AnimeKaiFilters.TypesFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.GenresFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.StatusFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.SortByFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.SeasonsFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.YearsFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.RatingFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.CountriesFilter -> filter.addQueryParameters(builder)
+                is AnimeKaiFilters.LanguagesFilter -> filter.addQueryParameters(builder)
                 else -> {}
             }
         }
@@ -201,13 +201,13 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         val enabledHosters = preferences.getStringSet("hoster_selection", HOSTERS.toSet()) ?: HOSTERS.toSet()
 
         val videoCodes = mutableListOf<VideoCode>()
-        linksDoc.select("div.server-items[data-id]").forEach {
-            val type = it.attr("data-id")
+        linksDoc.select("div.server-items[data-id]").forEach { items ->
+            val type = items.attr("data-id")
             if (type in enabledTypes) {
-                it.select("span.server[data-lid]").forEach {
-                    val serverName = it.text()
+                items.select("span.server[data-lid]").forEach { span ->
+                    val serverName = span.text()
                     if (serverName in enabledHosters) {
-                        videoCodes.add(VideoCode(type, it.attr("data-lid"), serverName))
+                        videoCodes.add(VideoCode(type, span.attr("data-lid"), serverName))
                     }
                 }
             }
@@ -346,6 +346,12 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         )
     }
 
+    private fun apiHeaders(referer: String) = headers.newBuilder()
+        .add("Accept", "*/*")
+        .add("X-Requested-With", "XMLHttpRequest")
+        .add("Referer", referer)
+        .build()
+
     override fun getFilterList(): AnimeFilterList = AnimeKaiFilters.FILTER_LIST
 
     private fun ResultResponse.toDocument() = Jsoup.parseBodyFragment(result ?: "")
@@ -380,7 +386,7 @@ class AnimeKai : ParsedAnimeHttpSource(), ConfigurableAnimeSource {
         
         const val PREF_DOMAIN_DEFAULT = "https://anikai.to"
         val DOMAIN_ENTRIES = arrayOf("animekai.to", "animekai.cc", "animekai.ac", "anikai.to")
-        val DOMAIN_VALUES = arrayOf("https://anikai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
+        val DOMAIN_VALUES = arrayOf("https://animekai.to", "https://animekai.cc", "https://animekai.ac", "https://anikai.to")
         
         val HOSTERS = listOf("Server 1", "Server 2")
         val DEFAULT_TYPES = setOf("sub", "dub", "softsub")

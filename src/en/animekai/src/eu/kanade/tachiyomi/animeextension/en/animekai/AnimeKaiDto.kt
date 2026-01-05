@@ -1,10 +1,16 @@
 package eu.kanade.tachiyomi.animeextension.en.animekai
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class ResultResponse(
     val result: String? = null,
+)
+
+@Serializable
+data class ResultResponseJson(
+    val result: JsonElement? = null,
 )
 
 @Serializable
@@ -40,8 +46,13 @@ data class MegaUpSource(
 data class MegaUpTrack(
     val file: String,
     val label: String? = null,
-    val kind: String,
+    val kind: String = "subtitles",
     val default: Boolean = false,
+)
+
+@Serializable
+data class MegaUpResponse(
+    val result: MegaUpResult,
 )
 
 @Serializable
